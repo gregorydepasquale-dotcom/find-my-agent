@@ -5,6 +5,25 @@
   const app = document.getElementById('app');
   const LS_KEY = 'realtorSwipe.clientId';
 
+  const US_STATES = [
+    ['AL', 'Alabama'], ['AK', 'Alaska'], ['AZ', 'Arizona'], ['AR', 'Arkansas'], ['CA', 'California'],
+    ['CO', 'Colorado'], ['CT', 'Connecticut'], ['DE', 'Delaware'], ['DC', 'District of Columbia'],
+    ['FL', 'Florida'], ['GA', 'Georgia'], ['HI', 'Hawaii'], ['ID', 'Idaho'], ['IL', 'Illinois'],
+    ['IN', 'Indiana'], ['IA', 'Iowa'], ['KS', 'Kansas'], ['KY', 'Kentucky'], ['LA', 'Louisiana'],
+    ['ME', 'Maine'], ['MD', 'Maryland'], ['MA', 'Massachusetts'], ['MI', 'Michigan'], ['MN', 'Minnesota'],
+    ['MS', 'Mississippi'], ['MO', 'Missouri'], ['MT', 'Montana'], ['NE', 'Nebraska'], ['NV', 'Nevada'],
+    ['NH', 'New Hampshire'], ['NJ', 'New Jersey'], ['NM', 'New Mexico'], ['NY', 'New York'],
+    ['NC', 'North Carolina'], ['ND', 'North Dakota'], ['OH', 'Ohio'], ['OK', 'Oklahoma'], ['OR', 'Oregon'],
+    ['PA', 'Pennsylvania'], ['RI', 'Rhode Island'], ['SC', 'South Carolina'], ['SD', 'South Dakota'],
+    ['TN', 'Tennessee'], ['TX', 'Texas'], ['UT', 'Utah'], ['VT', 'Vermont'], ['VA', 'Virginia'],
+    ['WA', 'Washington'], ['WV', 'West Virginia'], ['WI', 'Wisconsin'], ['WY', 'Wyoming'],
+  ];
+  function stateOptionsHtml(selected) {
+    return '<option value="">Select a state…</option>' + US_STATES.map(
+      ([code, name]) => `<option value="${code}"${code === selected ? ' selected' : ''}>${name}</option>`
+    ).join('');
+  }
+
   // ---------------- API helpers ----------------
   async function api(path, opts) {
     const res = await fetch('/api' + path, {
@@ -45,13 +64,49 @@
   }
 
   // ---------------- Onboarding ----------------
+  // Step 1 asks where the client is looking (state required, city optional) so the swipe
+  // deck can be scoped to agents who actually serve that state. Step 2 collects the rest.
   function renderOnboarding() {
+    renderLocationStep();
+  }
+
+  function renderLocationStep() {
+    app.innerHTML = '';
+    app.appendChild(el(`
+      <div class="screen onboarding">
+        <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
+        <h1>Where are you<br/>looking?</h1>
+        <p class="sub">We'll match you with agents who serve that area.</p>
+        <form id="location-form" style="display:flex; flex-direction:column; gap:14px;">
+          <div class="field">
+            <label>State</label>
+            <select name="state" required>${stateOptionsHtml()}</select>
+          </div>
+          <div class="field">
+            <label>City (optional)</label>
+            <input type="text" name="city" placeholder="e.g. Austin" />
+          </div>
+          <button class="btn btn-primary" type="submit">Continue →</button>
+        </form>
+        <p class="hint">Real estate agent? <a href="/agent-signup.html" style="color:#fff;">List your profile — $49/mo</a></p>
+        <p class="hint" style="margin-top:-4px;"><a href="/privacy.html" style="color:rgba(255,255,255,0.5);">Privacy Policy</a></p>
+      </div>
+    `));
+
+    document.getElementById('location-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      renderDetailsStep({ state: fd.get('state'), city: fd.get('city') });
+    });
+  }
+
+  function renderDetailsStep(location) {
     app.innerHTML = '';
     app.appendChild(el(`
       <div class="screen onboarding">
         <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
         <h1>Swipe. Match.<br/>Meet your agent.</h1>
-        <p class="sub">Tell us a bit about what you're looking for, then swipe through local agents to find the right fit.</p>
+        <p class="sub">Tell us a bit about what you're looking for, then swipe through agents near you to find the right fit.</p>
         <form id="onboard-form" style="display:flex; flex-direction:column; gap:14px;">
           <div class="field">
             <label>Your name</label>
@@ -74,21 +129,18 @@
               <option value="rent">Rent</option>
             </select>
           </div>
-          <div class="field">
-            <label>Area of interest</label>
-            <input type="text" name="area" placeholder="e.g. North Shore, Signal Mountain" />
-          </div>
           <button class="btn btn-primary" type="submit">Start swiping →</button>
+          <button class="btn btn-secondary" type="button" id="back-btn">← Back</button>
         </form>
-        <p class="hint">Real estate agent? <a href="/agent-signup.html" style="color:#fff;">List your profile — $49/mo</a></p>
-        <p class="hint" style="margin-top:-4px;"><a href="/privacy.html" style="color:rgba(255,255,255,0.5);">Privacy Policy</a></p>
       </div>
     `));
+
+    document.getElementById('back-btn').addEventListener('click', () => renderLocationStep());
 
     document.getElementById('onboard-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const btn = e.target.querySelector('button');
+      const btn = e.target.querySelector('button[type=submit]');
       btn.disabled = true;
       btn.textContent = 'Creating your profile…';
       try {
@@ -99,7 +151,8 @@
             phone: fd.get('phone'),
             email: fd.get('email'),
             intent: fd.get('intent'),
-            area: fd.get('area'),
+            area: location.city,
+            state: location.state,
           },
         });
         localStorage.setItem(LS_KEY, client.id);
@@ -412,7 +465,7 @@
             <div class="lead-item">
               <h3>${esc(l.name)}</h3>
               <div class="meta">${l.phone ? '📞 ' + esc(l.phone) : ''} ${l.email ? ' · ✉️ ' + esc(l.email) : ''}</div>
-              <div class="meta">${l.areaInterest ? '📍 ' + esc(l.areaInterest) : ''}</div>
+              <div class="meta">${l.areaInterest || l.state ? '📍 ' + esc([l.areaInterest, l.state].filter(Boolean).join(', ')) : ''}</div>
               <span class="pill">${esc(l.intent || 'interested')}</span>
             </div>
           `).join('')

@@ -41,6 +41,17 @@
   .photo-controls { display: flex; flex-direction: column; gap: 6px; flex: 1; }
   .photo-controls input[type=file] { font-size: 12.5px; color: rgba(255,255,255,0.7); }
   .remove-photo-btn { align-self: flex-start; background: none; border: none; color: rgba(255,255,255,0.55); font-size: 12px; text-decoration: underline; cursor: pointer; padding: 0; }
+  .admin-tabs { display: flex; gap: 8px; margin-bottom: 18px; }
+  .admin-tabs button { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12); color: rgba(255,255,255,0.75); border-radius: 999px; padding: 8px 16px; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .admin-tabs button.active { background: var(--gold); border-color: var(--gold); color: #201436; }
+  .client-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .client-toolbar p { margin: 0; font-size: 13px; color: rgba(255,255,255,0.6); }
+  .client-table-wrap { overflow-x: auto; background: rgba(255,255,255,0.07); border-radius: 16px; }
+  table.client-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.client-table th { text-align: left; padding: 12px 14px; color: rgba(255,255,255,0.55); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; border-bottom: 1px solid rgba(255,255,255,0.1); white-space: nowrap; }
+  table.client-table td { padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,0.06); vertical-align: top; }
+  table.client-table tr:last-child td { border-bottom: none; }
+  table.client-table td.muted { color: rgba(255,255,255,0.4); }
 </style>
 </head>
 <body>
@@ -50,6 +61,25 @@
   (function () {
     const root = document.getElementById('admin-app');
     const PW_KEY = 'agentrAdminPassword';
+
+    const US_STATES = [
+      ['AL', 'Alabama'], ['AK', 'Alaska'], ['AZ', 'Arizona'], ['AR', 'Arkansas'], ['CA', 'California'],
+      ['CO', 'Colorado'], ['CT', 'Connecticut'], ['DE', 'Delaware'], ['DC', 'District of Columbia'],
+      ['FL', 'Florida'], ['GA', 'Georgia'], ['HI', 'Hawaii'], ['ID', 'Idaho'], ['IL', 'Illinois'],
+      ['IN', 'Indiana'], ['IA', 'Iowa'], ['KS', 'Kansas'], ['KY', 'Kentucky'], ['LA', 'Louisiana'],
+      ['ME', 'Maine'], ['MD', 'Maryland'], ['MA', 'Massachusetts'], ['MI', 'Michigan'], ['MN', 'Minnesota'],
+      ['MS', 'Mississippi'], ['MO', 'Missouri'], ['MT', 'Montana'], ['NE', 'Nebraska'], ['NV', 'Nevada'],
+      ['NH', 'New Hampshire'], ['NJ', 'New Jersey'], ['NM', 'New Mexico'], ['NY', 'New York'],
+      ['NC', 'North Carolina'], ['ND', 'North Dakota'], ['OH', 'Ohio'], ['OK', 'Oklahoma'], ['OR', 'Oregon'],
+      ['PA', 'Pennsylvania'], ['RI', 'Rhode Island'], ['SC', 'South Carolina'], ['SD', 'South Dakota'],
+      ['TN', 'Tennessee'], ['TX', 'Texas'], ['UT', 'Utah'], ['VT', 'Vermont'], ['VA', 'Virginia'],
+      ['WA', 'Washington'], ['WV', 'West Virginia'], ['WI', 'Wisconsin'], ['WY', 'Wyoming'],
+    ];
+    function stateOptionsHtml(selected) {
+      return '<option value="">All states (unscoped)</option>' + US_STATES.map(
+        ([code, name]) => `<option value="${code}"${code === selected ? ' selected' : ''}>${name}</option>`
+      ).join('');
+    }
 
     function el(html) {
       const t = document.createElement('template');
@@ -115,7 +145,7 @@
     }
 
     function emptyForm() {
-      return { name: '', brokerage: '', photoEmoji: '🏠', photoUrl: null, bio: '', specialties: '', areas: '', yearsExperience: '', closedSales: '', rating: '', phone: '', email: '', subscriptionStatus: 'active' };
+      return { name: '', brokerage: '', photoEmoji: '🏠', photoUrl: null, bio: '', specialties: '', areas: '', yearsExperience: '', closedSales: '', rating: '', phone: '', email: '', subscriptionStatus: 'active', state: '' };
     }
 
     // Reads a File as base64 + its MIME type, for JSON-embedded photo uploads (keeps the
@@ -163,8 +193,13 @@
           <div class="field"><label>Phone</label><input name="phone" value="${esc(r.phone)}" /></div>
           <div class="field"><label>Email</label><input name="email" value="${esc(r.email)}" /></div>
         </div>
-        <div class="field"><label>Specialties (comma-separated)</label><input name="specialties" value="${esc(r.specialties)}" /></div>
-        <div class="field"><label>Areas served (comma-separated)</label><input name="areas" value="${esc(r.areas)}" /></div>
+        <div class="grid-2">
+          <div class="field"><label>State served</label>
+            <select name="state">${stateOptionsHtml(r.state)}</select>
+          </div>
+          <div class="field"><label>Specialties (comma-separated)</label><input name="specialties" value="${esc(r.specialties)}" /></div>
+        </div>
+        <div class="field"><label>Cities / zip codes served (comma-separated)</label><input name="areas" value="${esc(r.areas)}" placeholder="e.g. Austin, Round Rock, 78701" /></div>
         <div class="field"><label>Bio</label><textarea name="bio" style="padding:14px 16px;border-radius:14px;border:none;background:rgba(255,255,255,0.12);color:white;font-family:inherit;min-height:70px;">${esc(r.bio)}</textarea></div>
         <div class="grid-2">
           <div class="field"><label>Years experience</label><input name="yearsExperience" type="number" value="${esc(r.yearsExperience)}" /></div>
@@ -189,7 +224,7 @@
         bio: fd.get('bio'), specialties: fd.get('specialties'), areas: fd.get('areas'),
         yearsExperience: fd.get('yearsExperience'), closedSales: fd.get('closedSales'),
         rating: fd.get('rating'), phone: fd.get('phone'), email: fd.get('email'),
-        subscriptionStatus: fd.get('subscriptionStatus'),
+        subscriptionStatus: fd.get('subscriptionStatus'), state: fd.get('state'),
       };
     }
 
@@ -201,14 +236,36 @@
             <div class="brand">Agen<span class="accent">tr</span> Admin</div>
             <button class="logout-btn" id="logout-btn">Log out</button>
           </div>
-          <button class="btn btn-secondary add-toggle" id="add-toggle-btn">+ Add new realtor</button>
-          <div id="add-form-wrap"></div>
-          <div id="realtor-list">Loading…</div>
+          <div class="admin-tabs">
+            <button id="tab-realtors" class="active">Realtors</button>
+            <button id="tab-clients">Client Signups</button>
+          </div>
+          <div id="realtors-view">
+            <button class="btn btn-secondary add-toggle" id="add-toggle-btn">+ Add new realtor</button>
+            <div id="add-form-wrap"></div>
+            <div id="realtor-list">Loading…</div>
+          </div>
+          <div id="clients-view" style="display:none;">
+            <div id="clients-content">Loading…</div>
+          </div>
         </div>
       `));
       document.getElementById('logout-btn').addEventListener('click', () => {
         sessionStorage.removeItem(PW_KEY);
         renderLogin();
+      });
+      document.getElementById('tab-realtors').addEventListener('click', () => {
+        document.getElementById('tab-realtors').classList.add('active');
+        document.getElementById('tab-clients').classList.remove('active');
+        document.getElementById('realtors-view').style.display = '';
+        document.getElementById('clients-view').style.display = 'none';
+      });
+      document.getElementById('tab-clients').addEventListener('click', () => {
+        document.getElementById('tab-clients').classList.add('active');
+        document.getElementById('tab-realtors').classList.remove('active');
+        document.getElementById('clients-view').style.display = '';
+        document.getElementById('realtors-view').style.display = 'none';
+        loadClients();
       });
       document.getElementById('add-toggle-btn').addEventListener('click', () => {
         const wrap = document.getElementById('add-form-wrap');
@@ -332,6 +389,83 @@
       } catch (ex) {
         if (ex.message !== 'unauthorized') {
           listEl.innerHTML = '<p class="hint">' + esc(ex.message) + '</p>';
+        }
+      }
+    }
+
+    const INTENT_LABELS = { buy: 'Buy', sell: 'Sell', invest: 'Invest / STR', rent: 'Rent' };
+
+    function clientsToCsv(clients) {
+      const header = ['Name', 'Phone', 'Email', 'Looking to', 'City', 'State', 'Signed up'];
+      const rows = clients.map((c) => [
+        c.name || '', c.phone || '', c.email || '',
+        INTENT_LABELS[c.intent] || c.intent || '', c.areaInterest || '', c.state || '', c.createdAt || '',
+      ]);
+      const escCsv = (v) => {
+        const s = String(v);
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      };
+      return [header, ...rows].map((r) => r.map(escCsv).join(',')).join('\n');
+    }
+
+    async function loadClients() {
+      const contentEl = document.getElementById('clients-content');
+      try {
+        const { clients } = await adminApi('/clients');
+        if (!clients.length) {
+          contentEl.innerHTML = '<p class="hint">No client signups yet.</p>';
+          return;
+        }
+        contentEl.innerHTML = '';
+        const toolbar = el(`
+          <div class="client-toolbar">
+            <p>${clients.length} signup${clients.length === 1 ? '' : 's'} total</p>
+            <button class="btn btn-secondary" id="export-csv-btn" style="padding:8px 16px; font-size:12.5px;">Download CSV</button>
+          </div>
+        `);
+        toolbar.querySelector('#export-csv-btn').addEventListener('click', () => {
+          const csv = clientsToCsv(clients);
+          const blob = new Blob([csv], { type: 'text/csv' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'agentr-client-signups-' + new Date().toISOString().slice(0, 10) + '.csv';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        });
+        contentEl.appendChild(toolbar);
+
+        const tableWrap = el('<div class="client-table-wrap"></div>');
+        const table = el(`
+          <table class="client-table">
+            <thead>
+              <tr><th>Name</th><th>Phone</th><th>Email</th><th>Looking to</th><th>City</th><th>State</th><th>Signed up</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        `);
+        const tbody = table.querySelector('tbody');
+        clients.forEach((c) => {
+          const row = el(`
+            <tr>
+              <td>${esc(c.name)}</td>
+              <td class="${c.phone ? '' : 'muted'}">${esc(c.phone) || '—'}</td>
+              <td class="${c.email ? '' : 'muted'}">${esc(c.email) || '—'}</td>
+              <td>${esc(INTENT_LABELS[c.intent] || c.intent) || '—'}</td>
+              <td class="${c.areaInterest ? '' : 'muted'}">${esc(c.areaInterest) || '—'}</td>
+              <td class="${c.state ? '' : 'muted'}">${esc(c.state) || '—'}</td>
+              <td class="muted">${esc(c.createdAt)}</td>
+            </tr>
+          `);
+          tbody.appendChild(row);
+        });
+        tableWrap.appendChild(table);
+        contentEl.appendChild(tableWrap);
+      } catch (ex) {
+        if (ex.message !== 'unauthorized') {
+          contentEl.innerHTML = '<p class="hint">' + esc(ex.message) + '</p>';
         }
       }
     }
