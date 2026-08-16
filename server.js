@@ -2,6 +2,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { URL } = require('node:url');
 const {
   db,
@@ -10,6 +11,10 @@ const {
   getRealtorByStripeSubscriptionId,
   upsertPendingRealtor,
   updateRealtorSubscription,
+  getAllRealtorsAdmin,
+  createRealtorAdmin,
+  updateRealtorAdmin,
+  deleteRealtorAdmin,
 } = require('./db');
 const stripe = require('./stripe');
 
@@ -17,6 +22,16 @@ const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || '';
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+
+// Constant-time comparison of the X-Admin-Password header against ADMIN_PASSWORD.
+function checkAdminAuth(req) {
+  if (!ADMIN_PASSWORD) return false;
+  const supplied = Buffer.from(String(req.headers['x-admin-password'] || ''));
+  const expected = Buffer.from(ADMIN_PASSWORD);
+  if (supplied.length !== expected.length) return false;
+  return crypto.timingSafeEqual(supplied, expected);
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -98,6 +113,43 @@ function realtorToOwner(row) {
     subscriptionStatus: row.subscription_status || 'inactive',
     subscriptionCurrentPeriodEnd: row.subscription_current_period_end || null,
     hasBillingAccount: Boolean(row.stripe_customer_id),
+  };
+}
+
+// Full row shape for the password-gated admin panel — raw comma strings (not arrays)
+// so they round-trip cleanly through plain text form fields.
+function realtorToAdmin(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    brokerage: row.brokerage || '',
+    photoEmoji: row.photo_emoji || '',
+    bio: row.bio || '',
+    specialties: row.specialties || '',
+    areas: row.areas || '',
+    yearsExperience: row.years_experience,
+    closedSales: row.closed_sales,
+    rating: row.rating,
+    phone: row.phone || '',
+    email: row.email || '',
+    subscriptionStatus: row.subscription_status || 'inactive',
+  };
+}
+
+function adminFieldsFromBody(body) {
+  return {
+    name: (body.name || '').trim(),
+    brokerage: (body.brokerage || '').trim(),
+    photoEmoji: (body.photoEmoji || '🏠').trim(),
+    bio: (body.bio || '').trim(),
+    specialties: Array.isArray(body.specialties) ? body.specialties.join(',') : (body.specialties || '').trim(),
+    areas: Array.isArray(body.areas) ? body.areas.join(',') : (body.areas || '').trim(),
+    yearsExperience: body.yearsExperience !== undefined && body.yearsExperience !== '' ? Number(body.yearsExperience) : null,
+    closedSales: body.closedSales !== undefined && body.closedSales !== '' ? Number(body.closedSales) : 0,
+    rating: body.rating !== undefined && body.rating !== '' ? Number(body.rating) : null,
+    phone: (body.phone || '').trim(),
+    email: (body.email || '').trim(),
+    subscriptionStatus: body.subscriptionStatus === 'inactive' ? 'inactive' : 'active',
   };
 }
 
@@ -274,6 +326,57 @@ async function handleApi(req, res, url) {
         intent: c.intent, areaInterest: c.area_interest, matchedAt: c.matched_at,
       })),
     });
+  }
+
+  // POST /api/admin/login  { password }  -> lets the admin page verify before storing the password.
+  if (req.method === 'POST' && parts[1] === 'admin' && parts[2] === 'login' && parts.length === 3) {
+    if (!ADMIN_PASSWORD) {
+      return sendJson(res, 503, { error: 'Admin panel is not configured yet. Set ADMIN_PASSWORD.' });
+    }
+    const body = await readBody(req);
+    const supplied = Buffer.from(String(body.password || ''));
+    const expected = Buffer.from(ADMIN_PASSWORD);
+    const ok = supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+    if (!ok) return sendJson(res, 401, { error: 'Incorrect password' });
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // Every other /api/admin/* route requires the X-Admin-Password header on each request.
+  if (parts[1] === 'admin') {
+    if (!checkAdminAuth(req)) return sendJson(res, 401, { error: 'Unauthorized' });
+
+    // GET /api/admin/realtors  -> full roster, including inactive/pending agents.
+    if (req.method === 'GET' && parts[2] === 'realtors' && parts.length === 3) {
+      return sendJson(res, 200, { realtors: getAllRealtorsAdmin().map(realtorToAdmin) });
+    }
+
+    // POST /api/admin/realtors  -> add a new profile directly (bypasses the Stripe paywall).
+    if (req.method === 'POST' && parts[2] === 'realtors' && parts.length === 3) {
+      const body = await readBody(req);
+      const fields = adminFieldsFromBody(body);
+      if (!fields.name) return sendJson(res, 400, { error: 'name is required' });
+      const realtor = createRealtorAdmin(fields);
+      return sendJson(res, 201, { realtor: realtorToAdmin(realtor) });
+    }
+
+    // PUT /api/admin/realtors/:id  -> edit any field, including subscription status.
+    if (req.method === 'PUT' && parts[2] === 'realtors' && parts.length === 4) {
+      const body = await readBody(req);
+      const fields = adminFieldsFromBody(body);
+      if (!fields.name) return sendJson(res, 400, { error: 'name is required' });
+      const realtor = updateRealtorAdmin(Number(parts[3]), fields);
+      if (!realtor) return sendJson(res, 404, { error: 'realtor not found' });
+      return sendJson(res, 200, { realtor: realtorToAdmin(realtor) });
+    }
+
+    // DELETE /api/admin/realtors/:id
+    if (req.method === 'DELETE' && parts[2] === 'realtors' && parts.length === 4) {
+      const ok = deleteRealtorAdmin(Number(parts[3]));
+      if (!ok) return sendJson(res, 404, { error: 'realtor not found' });
+      return sendJson(res, 200, { ok: true });
+    }
+
+    return sendJson(res, 404, { error: 'not found' });
   }
 
   return sendJson(res, 404, { error: 'not found' });

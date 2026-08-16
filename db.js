@@ -237,6 +237,49 @@ function updateRealtorSubscription(realtorId, { status, stripeCustomerId, stripe
   return db.prepare('SELECT * FROM realtors WHERE id = ?').get(realtorId);
 }
 
+// ---------------- Admin helpers (manual profile management) ----------------
+
+function getAllRealtorsAdmin() {
+  return db.prepare('SELECT * FROM realtors ORDER BY id').all();
+}
+
+function createRealtorAdmin(fields) {
+  const info = db.prepare(`
+    INSERT INTO realtors
+      (name, brokerage, photo_emoji, bio, specialties, areas, years_experience, closed_sales, rating, phone, email, subscription_status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    fields.name, fields.brokerage || null, fields.photoEmoji || '🏠', fields.bio || null,
+    fields.specialties || null, fields.areas || null, fields.yearsExperience || null,
+    fields.closedSales || 0, fields.rating || null, fields.phone || null, fields.email || null,
+    fields.subscriptionStatus || 'active'
+  );
+  return db.prepare('SELECT * FROM realtors WHERE id = ?').get(info.lastInsertRowid);
+}
+
+function updateRealtorAdmin(id, fields) {
+  const current = db.prepare('SELECT * FROM realtors WHERE id = ?').get(id);
+  if (!current) return null;
+  db.prepare(`
+    UPDATE realtors SET
+      name = ?, brokerage = ?, photo_emoji = ?, bio = ?, specialties = ?, areas = ?,
+      years_experience = ?, closed_sales = ?, rating = ?, phone = ?, email = ?, subscription_status = ?
+    WHERE id = ?
+  `).run(
+    fields.name, fields.brokerage || null, fields.photoEmoji || null, fields.bio || null,
+    fields.specialties || null, fields.areas || null, fields.yearsExperience || null,
+    fields.closedSales || 0, fields.rating || null, fields.phone || null, fields.email || null,
+    fields.subscriptionStatus || current.subscription_status, id
+  );
+  return db.prepare('SELECT * FROM realtors WHERE id = ?').get(id);
+}
+
+function deleteRealtorAdmin(id) {
+  db.prepare('DELETE FROM swipes WHERE realtor_id = ?').run(id);
+  const info = db.prepare('DELETE FROM realtors WHERE id = ?').run(id);
+  return info.changes > 0;
+}
+
 module.exports = {
   db,
   getRealtorByEmail,
@@ -244,4 +287,8 @@ module.exports = {
   getRealtorByStripeSubscriptionId,
   upsertPendingRealtor,
   updateRealtorSubscription,
+  getAllRealtorsAdmin,
+  createRealtorAdmin,
+  updateRealtorAdmin,
+  deleteRealtorAdmin,
 };
