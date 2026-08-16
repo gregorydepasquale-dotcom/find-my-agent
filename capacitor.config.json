@@ -3,7 +3,7 @@
   "appName": "Find My Agent",
   "webDir": "public",
   "server": {
-    "url": "https://REPLACE-WITH-YOUR-DEPLOYED-URL.example.com",
+    "url": "https://find-my-agent-production.up.railway.app",
     "androidScheme": "https",
     "cleartext": false
   },
