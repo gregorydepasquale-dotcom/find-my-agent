@@ -66,6 +66,7 @@ function migrate() {
     ['stripe_subscription_id', 'TEXT'],
     ['subscription_current_period_end', 'TEXT'],
     ['subscription_updated_at', 'TEXT'],
+    ['photo_url', 'TEXT'],
   ];
   for (const [col, def] of newColumns) {
     if (!columnExists('realtors', col)) {
@@ -280,6 +281,15 @@ function deleteRealtorAdmin(id) {
   return info.changes > 0;
 }
 
+// Sets (or clears, when photoUrl is null) an uploaded profile photo, independent of the
+// text-field form save so a photo upload never accidentally clobbers other fields.
+function setRealtorPhoto(id, photoUrl) {
+  const current = db.prepare('SELECT * FROM realtors WHERE id = ?').get(id);
+  if (!current) return null;
+  db.prepare('UPDATE realtors SET photo_url = ? WHERE id = ?').run(photoUrl, id);
+  return db.prepare('SELECT * FROM realtors WHERE id = ?').get(id);
+}
+
 module.exports = {
   db,
   getRealtorByEmail,
@@ -291,4 +301,5 @@ module.exports = {
   createRealtorAdmin,
   updateRealtorAdmin,
   deleteRealtorAdmin,
+  setRealtorPhoto,
 };

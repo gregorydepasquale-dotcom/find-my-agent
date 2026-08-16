@@ -15,14 +15,25 @@ const {
   createRealtorAdmin,
   updateRealtorAdmin,
   deleteRealtorAdmin,
+  setRealtorPhoto,
 } = require('./db');
 const stripe = require('./stripe');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
+// Lives on the same persistent volume as the SQLite database (mounted at /app/data in
+// production), so uploaded photos survive redeploys instead of vanishing with the container.
+const UPLOADS_DIR = path.join(__dirname, 'data', 'uploads');
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || '';
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const PHOTO_MIME_EXT = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+};
+const MAX_PHOTO_BYTES = 4 * 1024 * 1024; // 4MB decoded
 
 // Constant-time comparison of the X-Admin-Password header against ADMIN_PASSWORD.
 function checkAdminAuth(req) {
@@ -52,13 +63,13 @@ function sendJson(res, status, data) {
   res.end(body);
 }
 
-function readBody(req) {
+function readBody(req, maxBytes = 1_000_000) {
   return new Promise((resolve, reject) => {
     let chunks = [];
     let size = 0;
     req.on('data', (chunk) => {
       size += chunk.length;
-      if (size > 1_000_000) { reject(new Error('Body too large')); req.destroy(); return; }
+      if (size > maxBytes) { reject(new Error('Body too large')); req.destroy(); return; }
       chunks.push(chunk);
     });
     req.on('end', () => {
@@ -93,6 +104,7 @@ function realtorToPublic(row) {
     name: row.name,
     brokerage: row.brokerage,
     photoEmoji: row.photo_emoji,
+    photoUrl: row.photo_url || null,
     bio: row.bio,
     specialties: (row.specialties || '').split(',').filter(Boolean),
     areas: (row.areas || '').split(',').filter(Boolean),
@@ -124,6 +136,7 @@ function realtorToAdmin(row) {
     name: row.name,
     brokerage: row.brokerage || '',
     photoEmoji: row.photo_emoji || '',
+    photoUrl: row.photo_url || null,
     bio: row.bio || '',
     specialties: row.specialties || '',
     areas: row.areas || '',
@@ -376,6 +389,57 @@ async function handleApi(req, res, url) {
       return sendJson(res, 200, { ok: true });
     }
 
+    // POST /api/admin/realtors/:id/photo  { imageBase64, contentType }  -> upload/replace profile photo.
+    if (req.method === 'POST' && parts[2] === 'realtors' && parts[4] === 'photo' && parts.length === 5) {
+      const id = Number(parts[3]);
+      const current = getAllRealtorsAdmin().find((r) => r.id === id);
+      if (!current) return sendJson(res, 404, { error: 'realtor not found' });
+
+      let body;
+      try {
+        body = await readBody(req, 8_000_000); // base64 inflates ~33% over the 4MB decoded cap
+      } catch (e) {
+        return sendJson(res, 413, { error: 'Photo is too large (max 4MB).' });
+      }
+      const contentType = String(body.contentType || '').toLowerCase();
+      const ext = PHOTO_MIME_EXT[contentType];
+      if (!ext) return sendJson(res, 400, { error: 'Unsupported image type. Use PNG, JPEG, or WEBP.' });
+
+      let buffer;
+      try {
+        buffer = Buffer.from(String(body.imageBase64 || ''), 'base64');
+      } catch (e) {
+        return sendJson(res, 400, { error: 'Invalid image data.' });
+      }
+      if (!buffer.length) return sendJson(res, 400, { error: 'No image data provided.' });
+      if (buffer.length > MAX_PHOTO_BYTES) return sendJson(res, 413, { error: 'Photo is too large (max 4MB).' });
+
+      const filename = `realtor-${id}-${Date.now()}${ext}`;
+      fs.writeFileSync(path.join(UPLOADS_DIR, filename), buffer);
+
+      // Best-effort cleanup of the previous photo file so uploads don't accumulate forever.
+      if (current.photo_url && current.photo_url.startsWith('/uploads/')) {
+        const oldPath = path.join(UPLOADS_DIR, path.basename(current.photo_url));
+        fs.unlink(oldPath, () => {});
+      }
+
+      const updated = setRealtorPhoto(id, '/uploads/' + filename);
+      return sendJson(res, 200, { realtor: realtorToAdmin(updated) });
+    }
+
+    // DELETE /api/admin/realtors/:id/photo  -> remove photo, revert to the emoji placeholder.
+    if (req.method === 'DELETE' && parts[2] === 'realtors' && parts[4] === 'photo' && parts.length === 5) {
+      const id = Number(parts[3]);
+      const current = getAllRealtorsAdmin().find((r) => r.id === id);
+      if (!current) return sendJson(res, 404, { error: 'realtor not found' });
+      if (current.photo_url && current.photo_url.startsWith('/uploads/')) {
+        const oldPath = path.join(UPLOADS_DIR, path.basename(current.photo_url));
+        fs.unlink(oldPath, () => {});
+      }
+      const updated = setRealtorPhoto(id, null);
+      return sendJson(res, 200, { realtor: realtorToAdmin(updated) });
+    }
+
     return sendJson(res, 404, { error: 'not found' });
   }
 
@@ -461,6 +525,22 @@ async function handleStripeWebhook(req, res) {
   return sendJson(res, 200, { received: true });
 }
 
+const UPLOAD_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp' };
+
+function serveUpload(req, res, pathname) {
+  const filename = path.basename(pathname); // strips any path traversal attempts
+  const fullPath = path.join(UPLOADS_DIR, filename);
+  const ext = path.extname(fullPath);
+  fs.readFile(fullPath, (err, data) => {
+    if (err) { res.writeHead(404); return res.end('Not found'); }
+    res.writeHead(200, {
+      'Content-Type': UPLOAD_MIME[ext] || 'application/octet-stream',
+      'Cache-Control': 'public, max-age=86400',
+    });
+    res.end(data);
+  });
+}
+
 function serveStatic(req, res, pathname) {
   let filePath = pathname === '/' ? '/index.html' : pathname;
   filePath = path.normalize(filePath).replace(/^(\.\.[/\\])+/, '');
@@ -490,6 +570,8 @@ const server = http.createServer(async (req, res) => {
       await handleStripeWebhook(req, res);
     } else if (url.pathname.startsWith('/api/')) {
       await handleApi(req, res, url);
+    } else if (url.pathname.startsWith('/uploads/')) {
+      serveUpload(req, res, url.pathname);
     } else {
       serveStatic(req, res, url.pathname);
     }
