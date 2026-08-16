@@ -22,7 +22,8 @@
   .realtor-card summary { cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; }
   .realtor-card summary::-webkit-details-marker { display: none; }
   .rc-title { display: flex; align-items: center; gap: 10px; font-size: 15.5px; font-weight: 700; }
-  .rc-title .emoji { font-size: 22px; }
+  .rc-title .emoji { font-size: 22px; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; overflow: hidden; flex-shrink: 0; }
+  .rc-title .emoji img { width: 100%; height: 100%; object-fit: cover; }
   .status-pill { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.02em; }
   .status-pill.active { background: rgba(233,194,28,0.18); color: var(--gold); }
   .status-pill.inactive { background: rgba(180,81,50,0.25); color: #e8927a; }
@@ -34,6 +35,12 @@
   .btn-danger { background: rgba(180,81,50,0.85); color: white; }
   .add-toggle { width: 100%; margin-bottom: 18px; }
   .save-msg { font-size: 12.5px; color: var(--gold); margin-top: 4px; display: none; }
+  .photo-row { display: flex; align-items: center; gap: 14px; }
+  .photo-preview { width: 64px; height: 64px; border-radius: 14px; background: rgba(255,255,255,0.12); display: flex; align-items: center; justify-content: center; font-size: 30px; overflow: hidden; flex-shrink: 0; }
+  .photo-preview img { width: 100%; height: 100%; object-fit: cover; }
+  .photo-controls { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  .photo-controls input[type=file] { font-size: 12.5px; color: rgba(255,255,255,0.7); }
+  .remove-photo-btn { align-self: flex-start; background: none; border: none; color: rgba(255,255,255,0.55); font-size: 12px; text-decoration: underline; cursor: pointer; padding: 0; }
 </style>
 </head>
 <body>
@@ -108,14 +115,48 @@
     }
 
     function emptyForm() {
-      return { name: '', brokerage: '', photoEmoji: '🏠', bio: '', specialties: '', areas: '', yearsExperience: '', closedSales: '', rating: '', phone: '', email: '', subscriptionStatus: 'active' };
+      return { name: '', brokerage: '', photoEmoji: '🏠', photoUrl: null, bio: '', specialties: '', areas: '', yearsExperience: '', closedSales: '', rating: '', phone: '', email: '', subscriptionStatus: 'active' };
+    }
+
+    // Reads a File as base64 + its MIME type, for JSON-embedded photo uploads (keeps the
+    // zero-dependency server from needing a multipart/form-data parser).
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result;
+          const comma = dataUrl.indexOf(',');
+          resolve({ base64: dataUrl.slice(comma + 1), contentType: file.type });
+        };
+        reader.onerror = () => reject(new Error('Could not read that file'));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function photoRowHtml(r) {
+      const preview = r.photoUrl
+        ? `<img src="${esc(r.photoUrl)}" alt="" />`
+        : esc(r.photoEmoji || '🏠');
+      return `
+        <div class="field">
+          <label>Profile photo</label>
+          <div class="photo-row">
+            <div class="photo-preview">${preview}</div>
+            <div class="photo-controls">
+              <input type="file" name="photoFile" accept="image/png,image/jpeg,image/webp" />
+              ${r.photoUrl ? '<button type="button" class="remove-photo-btn">Remove photo</button>' : ''}
+            </div>
+          </div>
+        </div>
+      `;
     }
 
     function fieldsHtml(r, idPrefix) {
       return `
+        ${photoRowHtml(r)}
         <div class="grid-2">
           <div class="field"><label>Name</label><input name="name" value="${esc(r.name)}" required /></div>
-          <div class="field"><label>Emoji</label><input name="photoEmoji" value="${esc(r.photoEmoji)}" maxlength="4" /></div>
+          <div class="field"><label>Fallback emoji</label><input name="photoEmoji" value="${esc(r.photoEmoji)}" maxlength="4" /></div>
         </div>
         <div class="field"><label>Brokerage</label><input name="brokerage" value="${esc(r.brokerage)}" /></div>
         <div class="grid-2">
@@ -186,12 +227,21 @@
         document.getElementById('add-form').addEventListener('submit', async (e) => {
           e.preventDefault();
           const err = e.target.querySelector('.error-banner');
+          const btn = e.target.querySelector('button[type=submit]');
           err.style.display = 'none';
+          const photoFile = e.target.querySelector('input[name=photoFile]').files[0];
           try {
-            await adminApi('/realtors', { method: 'POST', body: formValues(e.target) });
+            btn.disabled = true; btn.textContent = 'Creating…';
+            const { realtor } = await adminApi('/realtors', { method: 'POST', body: formValues(e.target) });
+            if (photoFile) {
+              btn.textContent = 'Uploading photo…';
+              const { base64, contentType } = await fileToBase64(photoFile);
+              await adminApi('/realtors/' + realtor.id + '/photo', { method: 'POST', body: { imageBase64: base64, contentType } });
+            }
             wrap.innerHTML = '';
             loadList();
           } catch (ex) {
+            btn.disabled = false; btn.textContent = 'Create profile';
             err.textContent = ex.message; err.style.display = 'block';
           }
         });
@@ -212,7 +262,7 @@
           const card = el(`
             <details class="realtor-card">
               <summary>
-                <div class="rc-title"><span class="emoji">${esc(r.photoEmoji || '🏠')}</span> ${esc(r.name)}</div>
+                <div class="rc-title"><span class="emoji">${r.photoUrl ? `<img src="${esc(r.photoUrl)}" alt="" />` : esc(r.photoEmoji || '🏠')}</span> ${esc(r.name)}</div>
                 <span class="status-pill ${r.subscriptionStatus === 'inactive' ? 'inactive' : 'active'}">${r.subscriptionStatus === 'inactive' ? 'Inactive' : 'Active'}</span>
               </summary>
               <form class="edit-form">
@@ -249,6 +299,34 @@
               errBox.textContent = ex.message; errBox.style.display = 'block';
             }
           });
+          const photoInput = card.querySelector('input[name=photoFile]');
+          photoInput.addEventListener('change', async () => {
+            const file = photoInput.files[0];
+            if (!file) return;
+            errBox.style.display = 'none'; saveMsg.style.display = 'none';
+            const preview = card.querySelector('.photo-preview');
+            const prevContent = preview.innerHTML;
+            preview.textContent = '…';
+            try {
+              const { base64, contentType } = await fileToBase64(file);
+              await adminApi('/realtors/' + r.id + '/photo', { method: 'POST', body: { imageBase64: base64, contentType } });
+              loadList();
+            } catch (ex) {
+              preview.innerHTML = prevContent;
+              errBox.textContent = ex.message; errBox.style.display = 'block';
+            }
+          });
+          const removeBtn = card.querySelector('.remove-photo-btn');
+          if (removeBtn) {
+            removeBtn.addEventListener('click', async () => {
+              try {
+                await adminApi('/realtors/' + r.id + '/photo', { method: 'DELETE' });
+                loadList();
+              } catch (ex) {
+                errBox.textContent = ex.message; errBox.style.display = 'block';
+              }
+            });
+          }
           listEl.appendChild(card);
         });
       } catch (ex) {

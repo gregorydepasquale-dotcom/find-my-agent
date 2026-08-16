@@ -231,7 +231,7 @@
         <div class="card" data-top="${isTop}" data-realtor-id="${r.id}"
              style="transform: translateY(${translateY}px) scale(${scale}); z-index:${10 - idxFromTop};">
           <div class="card-photo">
-            <span>${esc(r.photoEmoji || '🏠')}</span>
+            ${r.photoUrl ? `<img src="${esc(r.photoUrl)}" alt="${esc(r.name)}" />` : `<span>${esc(r.photoEmoji || '🏠')}</span>`}
             <span class="badge">★ ${r.rating != null ? r.rating.toFixed(1) : '—'}</span>
             <div class="stamp like">MATCH</div>
             <div class="stamp nope">PASS</div>
@@ -364,7 +364,7 @@
         const items = matches.map((m) => `
           <div class="match-item" style="flex-direction:column; align-items:stretch;">
             <div style="display:flex; gap:14px; align-items:center;">
-              <div class="avatar">${esc(m.photoEmoji || '🏠')}</div>
+              <div class="avatar">${m.photoUrl ? `<img src="${esc(m.photoUrl)}" alt="" />` : esc(m.photoEmoji || '🏠')}</div>
               <div class="info">
                 <h3>${esc(m.name)}</h3>
                 <p>${esc(m.brokerage || '')} · ★ ${m.rating != null ? m.rating.toFixed(1) : '—'}</p>
@@ -429,7 +429,7 @@
 
       content.innerHTML = `
         <div class="dash-header">
-          <h1>${esc(realtor.photoEmoji || '🏠')} ${esc(realtor.name)}</h1>
+          <h1><span class="dash-avatar">${realtor.photoUrl ? `<img src="${esc(realtor.photoUrl)}" alt="" />` : esc(realtor.photoEmoji || '🏠')}</span>${esc(realtor.name)}</h1>
           <p>${esc(realtor.brokerage || '')} · ${leads.length} lead${leads.length === 1 ? '' : 's'} matched</p>
         </div>
         ${subBanner}
