@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>List your agency — Agentr</title>
+<link rel="icon" href="/img/favicon.png" />
+<link rel="stylesheet" href="/style.css" />
+<style>
+  .field textarea {
+    padding: 14px 16px;
+    border-radius: 14px;
+    border: none;
+    font-size: 16px;
+    background: rgba(255,255,255,0.12);
+    color: white;
+    outline: none;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 80px;
+  }
+  .field textarea::placeholder { color: rgba(255,255,255,0.5); }
+  .price-banner {
+    background: rgba(233,194,28,0.14);
+    border: 1px solid rgba(233,194,28,0.4);
+    border-radius: 14px;
+    padding: 14px 16px;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  .price-banner b { color: var(--gold); }
+  .error-banner {
+    background: rgba(180,81,50,0.25);
+    border: 1px solid rgba(180,81,50,0.6);
+    border-radius: 14px;
+    padding: 12px 16px;
+    font-size: 14px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+  <div id="app">
+    <div class="screen onboarding">
+      <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
+      <h1>List your profile.<br/>Meet real leads.</h1>
+      <p class="sub">Get in front of home buyers, sellers, and investors swiping through Agentr. Your profile goes live as soon as your subscription is active.</p>
+
+      <div class="price-banner">
+        <b>$49/month</b> — cancel anytime. Billed securely through Stripe. You'll be redirected to complete payment after this form.
+      </div>
+
+      <div class="error-banner" id="error-banner"></div>
+
+      <form id="signup-form" style="display:flex; flex-direction:column; gap:14px;">
+        <div class="field">
+          <label>Your name</label>
+          <input type="text" name="name" placeholder="Jane Smith" required />
+        </div>
+        <div class="field">
+          <label>Brokerage</label>
+          <input type="text" name="brokerage" placeholder="Ridgeline Realty" />
+        </div>
+        <div class="field">
+          <label>Email</label>
+          <input type="email" name="email" placeholder="jane@example.com" required />
+        </div>
+        <div class="field">
+          <label>Phone</label>
+          <input type="tel" name="phone" placeholder="(423) 555-0100" />
+        </div>
+        <div class="field">
+          <label>Years of experience</label>
+          <input type="number" name="yearsExperience" min="0" placeholder="8" />
+        </div>
+        <div class="field">
+          <label>Specialties (comma-separated)</label>
+          <input type="text" name="specialties" placeholder="Buyers, First-Time Buyers, Condos" />
+        </div>
+        <div class="field">
+          <label>Areas you serve (comma-separated)</label>
+          <input type="text" name="areas" placeholder="Downtown, Southside" />
+        </div>
+        <div class="field">
+          <label>Short bio</label>
+          <textarea name="bio" placeholder="Tell clients what makes you the right fit."></textarea>
+        </div>
+        <button class="btn btn-primary" type="submit">Continue to payment →</button>
+      </form>
+      <p class="hint"><a href="/" style="color:rgba(255,255,255,0.6);">← Back to client view</a></p>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const errorBanner = document.getElementById('error-banner');
+      if (params.get('canceled')) {
+        errorBanner.textContent = 'Checkout was canceled — your info was saved, so you can pick up where you left off.';
+        errorBanner.style.display = 'block';
+      }
+
+      document.getElementById('signup-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const btn = e.target.querySelector('button');
+        btn.disabled = true;
+        btn.textContent = 'Redirecting to payment…';
+        errorBanner.style.display = 'none';
+        try {
+          const res = await fetch('/api/agents/signup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: fd.get('name'),
+              brokerage: fd.get('brokerage'),
+              email: fd.get('email'),
+              phone: fd.get('phone'),
+              yearsExperience: fd.get('yearsExperience'),
+              specialties: fd.get('specialties'),
+              areas: fd.get('areas'),
+              bio: fd.get('bio'),
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'Something went wrong');
+          window.location.href = data.checkoutUrl;
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = 'Continue to payment →';
+          errorBanner.textContent = err.message;
+          errorBanner.style.display = 'block';
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

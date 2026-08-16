@@ -49,7 +49,7 @@
     app.innerHTML = '';
     app.appendChild(el(`
       <div class="screen onboarding">
-        <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Find My<span class="accent">Agent</span></span></div>
+        <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
         <h1>Swipe. Match.<br/>Meet your agent.</h1>
         <p class="sub">Tell us a bit about what you're looking for, then swipe through local agents to find the right fit.</p>
         <form id="onboard-form" style="display:flex; flex-direction:column; gap:14px;">
@@ -80,7 +80,7 @@
           </div>
           <button class="btn btn-primary" type="submit">Start swiping →</button>
         </form>
-        <p class="hint">Realtor? <a href="/realtor/1" style="color:#fff;">View a sample leads dashboard</a></p>
+        <p class="hint">Real estate agent? <a href="/agent-signup.html" style="color:#fff;">List your profile — $49/mo</a></p>
         <p class="hint" style="margin-top:-4px;"><a href="/privacy.html" style="color:rgba(255,255,255,0.5);">Privacy Policy</a></p>
       </div>
     `));
@@ -136,7 +136,7 @@
       const wrap = el(`
         <div style="display:flex; flex-direction:column; min-height:100vh; min-height:100dvh; width:100%;">
           <div class="topbar">
-            <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Find My<span class="accent">Agent</span></span></div>
+            <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
             <button class="btn btn-secondary" id="reset-btn" style="padding:8px 14px; font-size:12px;">Start over</button>
           </div>
           <div id="tab-content" style="flex:1; display:flex; flex-direction:column;"></div>
@@ -392,7 +392,7 @@
     const wrap = el(`
       <div style="display:flex; flex-direction:column; min-height:100vh; min-height:100dvh;">
         <div class="topbar">
-          <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Find My<span class="accent">Agent</span></span></div>
+          <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
           <a href="/" class="btn btn-secondary" style="padding:8px 14px; font-size:12px; text-decoration:none; color:white;">Client view</a>
         </div>
         <div id="dash-content">
@@ -418,14 +418,40 @@
           `).join('')
         : `<div class="empty-state"><div class="emoji">📭</div><p>No leads matched yet.</p></div>`;
 
+      const isActive = realtor.subscriptionStatus === 'active';
+      const subBanner = isActive
+        ? `<div class="sub-banner sub-active">✅ Your profile is live and visible to clients.
+            ${realtor.hasBillingAccount ? '<button id="manage-billing" class="link-btn">Manage billing</button>' : ''}
+          </div>`
+        : `<div class="sub-banner sub-inactive">⚠️ Your profile is hidden from clients until you subscribe.
+            <a href="/agent-signup.html" class="link-btn" style="text-decoration:none;">Subscribe — $49/mo</a>
+          </div>`;
+
       content.innerHTML = `
         <div class="dash-header">
           <h1>${esc(realtor.photoEmoji || '🏠')} ${esc(realtor.name)}</h1>
           <p>${esc(realtor.brokerage || '')} · ${leads.length} lead${leads.length === 1 ? '' : 's'} matched</p>
         </div>
+        ${subBanner}
         ${leadItems}
         <p class="hint">This is your leads inbox — everyone who swiped right on your profile shows up here.</p>
       `;
+
+      const billingBtn = content.querySelector('#manage-billing');
+      if (billingBtn) {
+        billingBtn.addEventListener('click', async () => {
+          billingBtn.disabled = true;
+          billingBtn.textContent = 'Opening…';
+          try {
+            const { url } = await api('/agents/portal', { method: 'POST', body: { email: realtor.email } });
+            window.location.href = url;
+          } catch (err) {
+            billingBtn.disabled = false;
+            billingBtn.textContent = 'Manage billing';
+            alert('Could not open billing portal: ' + err.message);
+          }
+        });
+      }
     }).catch(() => {
       wrap.querySelector('#dash-content').innerHTML = `<div class="dash-header"><p>Realtor not found.</p></div>`;
     });

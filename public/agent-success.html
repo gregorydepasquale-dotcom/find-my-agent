@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>You're all set — Agentr</title>
+<link rel="icon" href="/img/favicon.png" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="app">
+    <div class="screen onboarding" style="text-align:center; align-items:center;">
+      <div style="font-size:56px;">🎉</div>
+      <h1>You're all set!</h1>
+      <p class="sub">Your payment went through. Your profile will appear in the Agentr swipe deck within a minute or two, as soon as we confirm your subscription.</p>
+      <a id="dash-link" href="/" class="btn btn-primary" style="text-decoration:none; display:inline-block;">View my dashboard</a>
+      <p class="hint"><a href="/" style="color:rgba(255,255,255,0.6);">← Back to client view</a></p>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const realtorId = params.get('realtor_id');
+      if (realtorId) {
+        document.getElementById('dash-link').href = '/realtor/' + realtorId;
+      }
+    })();
+  </script>
+</body>
+</html>
