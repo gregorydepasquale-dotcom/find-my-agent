@@ -52,14 +52,45 @@ db.exec(`
   );
 `);
 
+function columnExists(table, column) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  return cols.some((c) => c.name === column);
+}
+
+function migrate() {
+  // Paywall migration: agents must have an active subscription to appear in the client swipe deck.
+  const isFirstPaywallMigration = !columnExists('realtors', 'subscription_status');
+  const newColumns = [
+    ['subscription_status', "TEXT DEFAULT 'inactive'"],
+    ['stripe_customer_id', 'TEXT'],
+    ['stripe_subscription_id', 'TEXT'],
+    ['subscription_current_period_end', 'TEXT'],
+    ['subscription_updated_at', 'TEXT'],
+  ];
+  for (const [col, def] of newColumns) {
+    if (!columnExists('realtors', col)) {
+      db.exec(`ALTER TABLE realtors ADD COLUMN ${col} ${def}`);
+      console.log(`Migrated: added realtors.${col}`);
+    }
+  }
+  if (isFirstPaywallMigration) {
+    // Grandfather in every realtor that existed before the paywall shipped, so nothing
+    // disappears from the live app. Only agents who sign up from now on must pay to be listed.
+    db.exec(`UPDATE realtors SET subscription_status = 'active'`);
+    console.log('Grandfathered existing realtors as active (pre-paywall).');
+  }
+}
+
 function seed() {
   const count = db.prepare('SELECT COUNT(*) AS c FROM realtors').get().c;
   if (count > 0) return;
 
+  // Seed/demo profiles are bootstrap data, not paying signups — list them as active immediately
+  // so a fresh database (or a wiped volume) doesn't launch with an empty, agent-less swipe deck.
   const insert = db.prepare(`
     INSERT INTO realtors
-      (name, brokerage, photo_emoji, bio, specialties, areas, years_experience, closed_sales, rating, phone, email)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (name, brokerage, photo_emoji, bio, specialties, areas, years_experience, closed_sales, rating, phone, email, subscription_status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
   `);
 
   const realtors = [
@@ -139,7 +170,78 @@ function seed() {
   console.log(`Seeded ${realtors.length} realtor profiles.`);
 }
 
+migrate();
 seed();
 if (isNewDb) console.log('Created new database at', DB_PATH);
 
-module.exports = { db };
+// ---------------- Agent (realtor) subscription helpers ----------------
+
+function getRealtorByEmail(email) {
+  if (!email) return null;
+  return db.prepare('SELECT * FROM realtors WHERE lower(email) = lower(?)').get(email);
+}
+
+function getRealtorByStripeCustomerId(customerId) {
+  if (!customerId) return null;
+  return db.prepare('SELECT * FROM realtors WHERE stripe_customer_id = ?').get(customerId);
+}
+
+function getRealtorByStripeSubscriptionId(subscriptionId) {
+  if (!subscriptionId) return null;
+  return db.prepare('SELECT * FROM realtors WHERE stripe_subscription_id = ?').get(subscriptionId);
+}
+
+// Create (or reuse, if a prior signup attempt never completed checkout) a pending realtor row.
+function upsertPendingRealtor(fields) {
+  const existing = getRealtorByEmail(fields.email);
+  if (existing && existing.subscription_status !== 'active') {
+    db.prepare(`
+      UPDATE realtors SET
+        name = ?, brokerage = ?, photo_emoji = ?, bio = ?, specialties = ?, areas = ?,
+        years_experience = ?, phone = ?, email = ?
+      WHERE id = ?
+    `).run(
+      fields.name, fields.brokerage || null, fields.photoEmoji || '🏠', fields.bio || null,
+      fields.specialties || null, fields.areas || null, fields.yearsExperience || null,
+      fields.phone || null, fields.email, existing.id
+    );
+    return db.prepare('SELECT * FROM realtors WHERE id = ?').get(existing.id);
+  }
+  if (existing && existing.subscription_status === 'active') {
+    return existing; // already an active, paying agent — nothing to do
+  }
+  const info = db.prepare(`
+    INSERT INTO realtors
+      (name, brokerage, photo_emoji, bio, specialties, areas, years_experience, closed_sales, rating, phone, email, subscription_status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, 'inactive')
+  `).run(
+    fields.name, fields.brokerage || null, fields.photoEmoji || '🏠', fields.bio || null,
+    fields.specialties || null, fields.areas || null, fields.yearsExperience || null,
+    fields.phone || null, fields.email
+  );
+  return db.prepare('SELECT * FROM realtors WHERE id = ?').get(info.lastInsertRowid);
+}
+
+function updateRealtorSubscription(realtorId, { status, stripeCustomerId, stripeSubscriptionId, currentPeriodEnd }) {
+  const current = db.prepare('SELECT * FROM realtors WHERE id = ?').get(realtorId);
+  if (!current) return null;
+  db.prepare(`
+    UPDATE realtors SET
+      subscription_status = ?,
+      stripe_customer_id = COALESCE(?, stripe_customer_id),
+      stripe_subscription_id = COALESCE(?, stripe_subscription_id),
+      subscription_current_period_end = COALESCE(?, subscription_current_period_end),
+      subscription_updated_at = datetime('now')
+    WHERE id = ?
+  `).run(status, stripeCustomerId || null, stripeSubscriptionId || null, currentPeriodEnd || null, realtorId);
+  return db.prepare('SELECT * FROM realtors WHERE id = ?').get(realtorId);
+}
+
+module.exports = {
+  db,
+  getRealtorByEmail,
+  getRealtorByStripeCustomerId,
+  getRealtorByStripeSubscriptionId,
+  upsertPendingRealtor,
+  updateRealtorSubscription,
+};

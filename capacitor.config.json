@@ -1,6 +1,6 @@
 {
   "appId": "com.ikonickproperties.findmyagent",
-  "appName": "Find My Agent",
+  "appName": "Agentr",
   "webDir": "public",
   "server": {
     "url": "https://find-my-agent-production.up.railway.app",

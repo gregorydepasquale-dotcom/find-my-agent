@@ -1,4 +1,4 @@
-# Find My Agent
+# Agentr
 
 "Like Tinder, but for realtors." Clients swipe through local agent profiles;
 a right swipe is an instant match that drops the client into that agent's
@@ -92,7 +92,7 @@ access and (if installed) Xcode — I can't run these myself from here:
 
    ```bash
    npm install @capacitor/core @capacitor/cli @capacitor/ios
-   npx cap init "Find My Agent" "com.ikonickproperties.findmyagent" --web-dir=public
+   npx cap init "Agentr" "com.ikonickproperties.findmyagent" --web-dir=public
    npx cap add ios
    npx @capacitor/assets generate --iconBackgroundColor "#15110a" --splashBackgroundColor "#15110a"
    npx cap sync ios
