@@ -1,0 +1,16 @@
+{
+  "name": "realtor-swipe",
+  "version": "1.0.0",
+  "description": "Swipe-to-match app connecting clients with real estate agents — like Tinder, but for realtors.",
+  "type": "commonjs",
+  "main": "server.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "seed:reset": "node -e \"require('fs').existsSync('./data/app.db') && require('fs').unlinkSync('./data/app.db')\" && node -e \"require('./db')\""
+  },
+  "license": "UNLICENSED",
+  "dependencies": {}
+}

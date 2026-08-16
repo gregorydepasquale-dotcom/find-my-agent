@@ -1,0 +1,14 @@
+{
+  "appId": "com.ikonickproperties.findmyagent",
+  "appName": "Find My Agent",
+  "webDir": "public",
+  "server": {
+    "url": "https://REPLACE-WITH-YOUR-DEPLOYED-URL.example.com",
+    "androidScheme": "https",
+    "cleartext": false
+  },
+  "backgroundColor": "#15110a",
+  "ios": {
+    "backgroundColor": "#15110a"
+  }
+}
