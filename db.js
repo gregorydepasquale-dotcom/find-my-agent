@@ -67,6 +67,7 @@ function migrate() {
     ['subscription_current_period_end', 'TEXT'],
     ['subscription_updated_at', 'TEXT'],
     ['photo_url', 'TEXT'],
+    ['state', 'TEXT'],
   ];
   for (const [col, def] of newColumns) {
     if (!columnExists('realtors', col)) {
@@ -79,6 +80,14 @@ function migrate() {
     // disappears from the live app. Only agents who sign up from now on must pay to be listed.
     db.exec(`UPDATE realtors SET subscription_status = 'active'`);
     console.log('Grandfathered existing realtors as active (pre-paywall).');
+  }
+
+  // State-based matching (nationwide expansion). A realtor with no state set is treated as
+  // visible everywhere (see the /api/realtors query) so existing profiles don't vanish the
+  // moment this column appears — admins/agents opt into state-scoping by filling it in.
+  if (!columnExists('clients', 'state')) {
+    db.exec(`ALTER TABLE clients ADD COLUMN state TEXT`);
+    console.log('Migrated: added clients.state');
   }
 }
 
@@ -247,13 +256,13 @@ function getAllRealtorsAdmin() {
 function createRealtorAdmin(fields) {
   const info = db.prepare(`
     INSERT INTO realtors
-      (name, brokerage, photo_emoji, bio, specialties, areas, years_experience, closed_sales, rating, phone, email, subscription_status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (name, brokerage, photo_emoji, bio, specialties, areas, years_experience, closed_sales, rating, phone, email, subscription_status, state)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     fields.name, fields.brokerage || null, fields.photoEmoji || '🏠', fields.bio || null,
     fields.specialties || null, fields.areas || null, fields.yearsExperience || null,
     fields.closedSales || 0, fields.rating || null, fields.phone || null, fields.email || null,
-    fields.subscriptionStatus || 'active'
+    fields.subscriptionStatus || 'active', fields.state || null
   );
   return db.prepare('SELECT * FROM realtors WHERE id = ?').get(info.lastInsertRowid);
 }
@@ -264,13 +273,13 @@ function updateRealtorAdmin(id, fields) {
   db.prepare(`
     UPDATE realtors SET
       name = ?, brokerage = ?, photo_emoji = ?, bio = ?, specialties = ?, areas = ?,
-      years_experience = ?, closed_sales = ?, rating = ?, phone = ?, email = ?, subscription_status = ?
+      years_experience = ?, closed_sales = ?, rating = ?, phone = ?, email = ?, subscription_status = ?, state = ?
     WHERE id = ?
   `).run(
     fields.name, fields.brokerage || null, fields.photoEmoji || null, fields.bio || null,
     fields.specialties || null, fields.areas || null, fields.yearsExperience || null,
     fields.closedSales || 0, fields.rating || null, fields.phone || null, fields.email || null,
-    fields.subscriptionStatus || current.subscription_status, id
+    fields.subscriptionStatus || current.subscription_status, fields.state || null, id
   );
   return db.prepare('SELECT * FROM realtors WHERE id = ?').get(id);
 }
@@ -279,6 +288,12 @@ function deleteRealtorAdmin(id) {
   db.prepare('DELETE FROM swipes WHERE realtor_id = ?').run(id);
   const info = db.prepare('DELETE FROM realtors WHERE id = ?').run(id);
   return info.changes > 0;
+}
+
+// Every client who has ever completed onboarding, whether or not they've matched with
+// anyone yet — this is the full lead list, not just the per-realtor "matched" subset.
+function getAllClientsAdmin() {
+  return db.prepare('SELECT * FROM clients ORDER BY created_at DESC').all();
 }
 
 // Sets (or clears, when photoUrl is null) an uploaded profile photo, independent of the
@@ -302,4 +317,5 @@ module.exports = {
   updateRealtorAdmin,
   deleteRealtorAdmin,
   setRealtorPhoto,
+  getAllClientsAdmin,
 };

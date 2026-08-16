@@ -16,6 +16,7 @@ const {
   updateRealtorAdmin,
   deleteRealtorAdmin,
   setRealtorPhoto,
+  getAllClientsAdmin,
 } = require('./db');
 const stripe = require('./stripe');
 
@@ -111,6 +112,7 @@ function realtorToPublic(row) {
     yearsExperience: row.years_experience,
     closedSales: row.closed_sales,
     rating: row.rating,
+    state: row.state || null,
   };
 }
 
@@ -146,6 +148,7 @@ function realtorToAdmin(row) {
     phone: row.phone || '',
     email: row.email || '',
     subscriptionStatus: row.subscription_status || 'inactive',
+    state: row.state || '',
   };
 }
 
@@ -163,43 +166,50 @@ function adminFieldsFromBody(body) {
     phone: (body.phone || '').trim(),
     email: (body.email || '').trim(),
     subscriptionStatus: body.subscriptionStatus === 'inactive' ? 'inactive' : 'active',
+    state: (body.state || '').trim().toUpperCase().slice(0, 2) || null,
   };
 }
 
 async function handleApi(req, res, url) {
   const parts = url.pathname.split('/').filter(Boolean); // ['api', ...]
 
-  // POST /api/clients  { name, phone, email, intent, area }
+  // POST /api/clients  { name, phone, email, intent, area, state }
   if (req.method === 'POST' && parts[1] === 'clients' && parts.length === 2) {
     const body = await readBody(req);
     const name = (body.name || '').trim();
     if (!name) return sendJson(res, 400, { error: 'name is required' });
     const stmt = db.prepare(`
-      INSERT INTO clients (name, phone, email, intent, area_interest)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO clients (name, phone, email, intent, area_interest, state)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
     const info = stmt.run(
       name,
       (body.phone || '').trim() || null,
       (body.email || '').trim() || null,
       (body.intent || '').trim() || null,
-      (body.area || '').trim() || null
+      (body.area || '').trim() || null,
+      (body.state || '').trim().toUpperCase().slice(0, 2) || null
     );
     const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(info.lastInsertRowid);
     return sendJson(res, 201, { client });
   }
 
-  // GET /api/realtors?client_id=X  -> active, paid realtors not yet swiped by this client
+  // GET /api/realtors?client_id=X  -> active, paid realtors not yet swiped by this client,
+  // scoped to the client's state. A realtor with no state set is treated as visible
+  // everywhere (see the migration note in db.js) so profiles never silently disappear.
   if (req.method === 'GET' && parts[1] === 'realtors' && parts.length === 2) {
     const clientId = Number(url.searchParams.get('client_id'));
     let rows;
     if (clientId) {
+      const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(clientId);
+      const clientState = client && client.state;
       rows = db.prepare(`
         SELECT * FROM realtors
         WHERE subscription_status = 'active'
+          AND (state IS NULL OR state = '' OR state = ?)
           AND id NOT IN (SELECT realtor_id FROM swipes WHERE client_id = ?)
         ORDER BY id
-      `).all(clientId);
+      `).all(clientState || '', clientId);
     } else {
       rows = db.prepare(`SELECT * FROM realtors WHERE subscription_status = 'active' ORDER BY id`).all();
     }
@@ -336,7 +346,7 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, {
       leads: rows.map((c) => ({
         id: c.id, name: c.name, phone: c.phone, email: c.email,
-        intent: c.intent, areaInterest: c.area_interest, matchedAt: c.matched_at,
+        intent: c.intent, areaInterest: c.area_interest, state: c.state, matchedAt: c.matched_at,
       })),
     });
   }
@@ -438,6 +448,21 @@ async function handleApi(req, res, url) {
       }
       const updated = setRealtorPhoto(id, null);
       return sendJson(res, 200, { realtor: realtorToAdmin(updated) });
+    }
+
+    // GET /api/admin/clients  -> every completed onboarding signup, matched or not.
+    if (req.method === 'GET' && parts[2] === 'clients' && parts.length === 3) {
+      const clients = getAllClientsAdmin().map((c) => ({
+        id: c.id,
+        name: c.name,
+        phone: c.phone,
+        email: c.email,
+        intent: c.intent,
+        areaInterest: c.area_interest,
+        state: c.state,
+        createdAt: c.created_at,
+      }));
+      return sendJson(res, 200, { clients });
     }
 
     return sendJson(res, 404, { error: 'not found' });
