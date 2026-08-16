@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>Admin — Agentr</title>
+<link rel="icon" href="/img/favicon.png" />
+<link rel="stylesheet" href="/style.css" />
+<style>
+  body { overscroll-behavior: auto; }
+  #admin-app { max-width: 720px; margin: 0 auto; min-height: 100vh; padding: 24px 20px 60px; }
+  .admin-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .admin-header h1 { font-size: 22px; margin: 0; }
+  .admin-header .brand { font-size: 17px; font-weight: 800; }
+  .admin-header .brand .accent { color: var(--gold); }
+  .logout-btn { background: none; border: 1px solid rgba(255,255,255,0.25); color: rgba(255,255,255,0.8); border-radius: 999px; padding: 7px 14px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+  .login-wrap { max-width: 360px; margin: 18vh auto; padding: 0 20px; text-align: center; }
+  .login-wrap h1 { font-size: 24px; margin-bottom: 6px; }
+  .login-wrap p { color: rgba(255,255,255,0.65); font-size: 14px; margin-bottom: 20px; }
+  .error-banner { background: rgba(180,81,50,0.25); border: 1px solid rgba(180,81,50,0.6); border-radius: 12px; padding: 10px 14px; font-size: 13.5px; margin-top: 14px; display: none; text-align: left; }
+  .realtor-card { background: rgba(255,255,255,0.07); border-radius: 16px; padding: 16px 18px; margin-bottom: 14px; }
+  .realtor-card summary { cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; }
+  .realtor-card summary::-webkit-details-marker { display: none; }
+  .rc-title { display: flex; align-items: center; gap: 10px; font-size: 15.5px; font-weight: 700; }
+  .rc-title .emoji { font-size: 22px; }
+  .status-pill { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.02em; }
+  .status-pill.active { background: rgba(233,194,28,0.18); color: var(--gold); }
+  .status-pill.inactive { background: rgba(180,81,50,0.25); color: #e8927a; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .edit-form { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .edit-form .field label { font-size: 12px; }
+  .row-actions { display: flex; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
+  .row-actions .btn { flex: 1; padding: 11px 14px; font-size: 13.5px; }
+  .btn-danger { background: rgba(180,81,50,0.85); color: white; }
+  .add-toggle { width: 100%; margin-bottom: 18px; }
+  .save-msg { font-size: 12.5px; color: var(--gold); margin-top: 4px; display: none; }
+</style>
+</head>
+<body>
+  <div id="admin-app"></div>
+
+  <script>
+  (function () {
+    const root = document.getElementById('admin-app');
+    const PW_KEY = 'agentrAdminPassword';
+
+    function el(html) {
+      const t = document.createElement('template');
+      t.innerHTML = html.trim();
+      return t.content.firstElementChild;
+    }
+    function esc(s) {
+      return (s == null ? '' : s).toString().replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[c]));
+    }
+    async function adminApi(path, opts) {
+      const pw = sessionStorage.getItem(PW_KEY) || '';
+      const res = await fetch('/api/admin' + path, {
+        method: (opts && opts.method) || 'GET',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Password': pw },
+        body: opts && opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+      if (res.status === 401) { sessionStorage.removeItem(PW_KEY); renderLogin('Session expired — log in again.'); throw new Error('unauthorized'); }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      return data;
+    }
+
+    function renderLogin(errorMsg) {
+      root.innerHTML = '';
+      root.appendChild(el(`
+        <div class="login-wrap">
+          <div class="brand" style="justify-content:center; display:flex; margin-bottom:14px;">Agen<span class="accent">tr</span> Admin</div>
+          <h1>Enter admin password</h1>
+          <p>Manage realtor profiles shown in the app.</p>
+          <form id="login-form" style="display:flex; flex-direction:column; gap:12px;">
+            <div class="field">
+              <input type="password" name="password" placeholder="Admin password" required autofocus />
+            </div>
+            <button class="btn btn-primary" type="submit">Log in</button>
+          </form>
+          <div class="error-banner" id="login-error"></div>
+        </div>
+      `));
+      const errBox = document.getElementById('login-error');
+      if (errorMsg) { errBox.textContent = errorMsg; errBox.style.display = 'block'; }
+      document.getElementById('login-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const pw = new FormData(e.target).get('password');
+        const btn = e.target.querySelector('button');
+        btn.disabled = true; btn.textContent = 'Checking…';
+        try {
+          const res = await fetch('/api/admin/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: pw }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'Login failed');
+          sessionStorage.setItem(PW_KEY, pw);
+          renderPanel();
+        } catch (err) {
+          btn.disabled = false; btn.textContent = 'Log in';
+          errBox.textContent = err.message; errBox.style.display = 'block';
+        }
+      });
+    }
+
+    function emptyForm() {
+      return { name: '', brokerage: '', photoEmoji: '🏠', bio: '', specialties: '', areas: '', yearsExperience: '', closedSales: '', rating: '', phone: '', email: '', subscriptionStatus: 'active' };
+    }
+
+    function fieldsHtml(r, idPrefix) {
+      return `
+        <div class="grid-2">
+          <div class="field"><label>Name</label><input name="name" value="${esc(r.name)}" required /></div>
+          <div class="field"><label>Emoji</label><input name="photoEmoji" value="${esc(r.photoEmoji)}" maxlength="4" /></div>
+        </div>
+        <div class="field"><label>Brokerage</label><input name="brokerage" value="${esc(r.brokerage)}" /></div>
+        <div class="grid-2">
+          <div class="field"><label>Phone</label><input name="phone" value="${esc(r.phone)}" /></div>
+          <div class="field"><label>Email</label><input name="email" value="${esc(r.email)}" /></div>
+        </div>
+        <div class="field"><label>Specialties (comma-separated)</label><input name="specialties" value="${esc(r.specialties)}" /></div>
+        <div class="field"><label>Areas served (comma-separated)</label><input name="areas" value="${esc(r.areas)}" /></div>
+        <div class="field"><label>Bio</label><textarea name="bio" style="padding:14px 16px;border-radius:14px;border:none;background:rgba(255,255,255,0.12);color:white;font-family:inherit;min-height:70px;">${esc(r.bio)}</textarea></div>
+        <div class="grid-2">
+          <div class="field"><label>Years experience</label><input name="yearsExperience" type="number" value="${esc(r.yearsExperience)}" /></div>
+          <div class="field"><label>Closed sales</label><input name="closedSales" type="number" value="${esc(r.closedSales)}" /></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Rating (0–5)</label><input name="rating" type="number" step="0.1" min="0" max="5" value="${esc(r.rating)}" /></div>
+          <div class="field"><label>Listing status</label>
+            <select name="subscriptionStatus">
+              <option value="active" ${r.subscriptionStatus !== 'inactive' ? 'selected' : ''}>Active (visible in app)</option>
+              <option value="inactive" ${r.subscriptionStatus === 'inactive' ? 'selected' : ''}>Inactive (hidden)</option>
+            </select>
+          </div>
+        </div>
+      `;
+    }
+
+    function formValues(form) {
+      const fd = new FormData(form);
+      return {
+        name: fd.get('name'), brokerage: fd.get('brokerage'), photoEmoji: fd.get('photoEmoji'),
+        bio: fd.get('bio'), specialties: fd.get('specialties'), areas: fd.get('areas'),
+        yearsExperience: fd.get('yearsExperience'), closedSales: fd.get('closedSales'),
+        rating: fd.get('rating'), phone: fd.get('phone'), email: fd.get('email'),
+        subscriptionStatus: fd.get('subscriptionStatus'),
+      };
+    }
+
+    async function renderPanel() {
+      root.innerHTML = '';
+      root.appendChild(el(`
+        <div>
+          <div class="admin-header">
+            <div class="brand">Agen<span class="accent">tr</span> Admin</div>
+            <button class="logout-btn" id="logout-btn">Log out</button>
+          </div>
+          <button class="btn btn-secondary add-toggle" id="add-toggle-btn">+ Add new realtor</button>
+          <div id="add-form-wrap"></div>
+          <div id="realtor-list">Loading…</div>
+        </div>
+      `));
+      document.getElementById('logout-btn').addEventListener('click', () => {
+        sessionStorage.removeItem(PW_KEY);
+        renderLogin();
+      });
+      document.getElementById('add-toggle-btn').addEventListener('click', () => {
+        const wrap = document.getElementById('add-form-wrap');
+        if (wrap.children.length) { wrap.innerHTML = ''; return; }
+        wrap.appendChild(el(`
+          <div class="realtor-card">
+            <form id="add-form" class="edit-form">
+              ${fieldsHtml(emptyForm())}
+              <div class="row-actions">
+                <button class="btn btn-primary" type="submit">Create profile</button>
+              </div>
+              <div class="error-banner" style="display:none;"></div>
+            </form>
+          </div>
+        `));
+        document.getElementById('add-form').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const err = e.target.querySelector('.error-banner');
+          err.style.display = 'none';
+          try {
+            await adminApi('/realtors', { method: 'POST', body: formValues(e.target) });
+            wrap.innerHTML = '';
+            loadList();
+          } catch (ex) {
+            err.textContent = ex.message; err.style.display = 'block';
+          }
+        });
+      });
+      loadList();
+    }
+
+    async function loadList() {
+      const listEl = document.getElementById('realtor-list');
+      try {
+        const { realtors } = await adminApi('/realtors');
+        if (!realtors.length) {
+          listEl.innerHTML = '<p class="hint">No realtor profiles yet.</p>';
+          return;
+        }
+        listEl.innerHTML = '';
+        realtors.forEach((r) => {
+          const card = el(`
+            <details class="realtor-card">
+              <summary>
+                <div class="rc-title"><span class="emoji">${esc(r.photoEmoji || '🏠')}</span> ${esc(r.name)}</div>
+                <span class="status-pill ${r.subscriptionStatus === 'inactive' ? 'inactive' : 'active'}">${r.subscriptionStatus === 'inactive' ? 'Inactive' : 'Active'}</span>
+              </summary>
+              <form class="edit-form">
+                ${fieldsHtml(r)}
+                <div class="row-actions">
+                  <button class="btn btn-primary" type="submit">Save changes</button>
+                  <button type="button" class="btn btn-danger delete-btn">Delete profile</button>
+                </div>
+                <div class="save-msg">Saved.</div>
+                <div class="error-banner" style="display:none;"></div>
+              </form>
+            </details>
+          `);
+          const form = card.querySelector('form');
+          const errBox = card.querySelector('.error-banner');
+          const saveMsg = card.querySelector('.save-msg');
+          form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errBox.style.display = 'none'; saveMsg.style.display = 'none';
+            try {
+              await adminApi('/realtors/' + r.id, { method: 'PUT', body: formValues(form) });
+              saveMsg.style.display = 'block';
+              loadList();
+            } catch (ex) {
+              errBox.textContent = ex.message; errBox.style.display = 'block';
+            }
+          });
+          card.querySelector('.delete-btn').addEventListener('click', async () => {
+            if (!confirm('Delete ' + r.name + '? This cannot be undone.')) return;
+            try {
+              await adminApi('/realtors/' + r.id, { method: 'DELETE' });
+              loadList();
+            } catch (ex) {
+              errBox.textContent = ex.message; errBox.style.display = 'block';
+            }
+          });
+          listEl.appendChild(card);
+        });
+      } catch (ex) {
+        if (ex.message !== 'unauthorized') {
+          listEl.innerHTML = '<p class="hint">' + esc(ex.message) + '</p>';
+        }
+      }
+    }
+
+    if (sessionStorage.getItem(PW_KEY)) {
+      renderPanel();
+    } else {
+      renderLogin();
+    }
+  })();
+  </script>
+</body>
+</html>
