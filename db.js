@@ -68,6 +68,7 @@ function migrate() {
     ['subscription_updated_at', 'TEXT'],
     ['photo_url', 'TEXT'],
     ['state', 'TEXT'],
+    ['video_url', 'TEXT'],
   ];
   for (const [col, def] of newColumns) {
     if (!columnExists('realtors', col)) {
@@ -208,12 +209,12 @@ function upsertPendingRealtor(fields) {
     db.prepare(`
       UPDATE realtors SET
         name = ?, brokerage = ?, photo_emoji = ?, bio = ?, specialties = ?, areas = ?,
-        years_experience = ?, phone = ?, email = ?
+        years_experience = ?, phone = ?, email = ?, state = ?
       WHERE id = ?
     `).run(
       fields.name, fields.brokerage || null, fields.photoEmoji || '🏠', fields.bio || null,
       fields.specialties || null, fields.areas || null, fields.yearsExperience || null,
-      fields.phone || null, fields.email, existing.id
+      fields.phone || null, fields.email, fields.state || null, existing.id
     );
     return db.prepare('SELECT * FROM realtors WHERE id = ?').get(existing.id);
   }
@@ -222,12 +223,12 @@ function upsertPendingRealtor(fields) {
   }
   const info = db.prepare(`
     INSERT INTO realtors
-      (name, brokerage, photo_emoji, bio, specialties, areas, years_experience, closed_sales, rating, phone, email, subscription_status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, 'inactive')
+      (name, brokerage, photo_emoji, bio, specialties, areas, years_experience, closed_sales, rating, phone, email, subscription_status, state)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, 'inactive', ?)
   `).run(
     fields.name, fields.brokerage || null, fields.photoEmoji || '🏠', fields.bio || null,
     fields.specialties || null, fields.areas || null, fields.yearsExperience || null,
-    fields.phone || null, fields.email
+    fields.phone || null, fields.email, fields.state || null
   );
   return db.prepare('SELECT * FROM realtors WHERE id = ?').get(info.lastInsertRowid);
 }
@@ -305,6 +306,13 @@ function setRealtorPhoto(id, photoUrl) {
   return db.prepare('SELECT * FROM realtors WHERE id = ?').get(id);
 }
 
+function setRealtorVideo(id, videoUrl) {
+  const current = db.prepare('SELECT * FROM realtors WHERE id = ?').get(id);
+  if (!current) return null;
+  db.prepare('UPDATE realtors SET video_url = ? WHERE id = ?').run(videoUrl, id);
+  return db.prepare('SELECT * FROM realtors WHERE id = ?').get(id);
+}
+
 module.exports = {
   db,
   getRealtorByEmail,
@@ -317,5 +325,6 @@ module.exports = {
   updateRealtorAdmin,
   deleteRealtorAdmin,
   setRealtorPhoto,
+  setRealtorVideo,
   getAllClientsAdmin,
 };

@@ -16,6 +16,7 @@ const {
   updateRealtorAdmin,
   deleteRealtorAdmin,
   setRealtorPhoto,
+  setRealtorVideo,
   getAllClientsAdmin,
 } = require('./db');
 const stripe = require('./stripe');
@@ -35,6 +36,12 @@ const PHOTO_MIME_EXT = {
   'image/webp': '.webp',
 };
 const MAX_PHOTO_BYTES = 4 * 1024 * 1024; // 4MB decoded
+const VIDEO_MIME_EXT = {
+  'video/mp4': '.mp4',
+  'video/quicktime': '.mov',
+  'video/webm': '.webm',
+};
+const MAX_VIDEO_BYTES = 60 * 1024 * 1024; // 60MB — short intro clips, sent as raw binary (no base64 inflation)
 
 // Constant-time comparison of the X-Admin-Password header against ADMIN_PASSWORD.
 function checkAdminAuth(req) {
@@ -99,6 +106,23 @@ function readRawBody(req) {
   });
 }
 
+// Like readRawBody, but returns a Buffer (not decoded to text) and allows a larger cap —
+// used for binary uploads like video, sent as a raw request body (not base64/JSON) so we
+// don't pay the ~33% base64 size penalty on top of an already-large file.
+function readRawBinaryBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    let chunks = [];
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) { reject(new Error('Body too large')); req.destroy(); return; }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
 function realtorToPublic(row) {
   return {
     id: row.id,
@@ -106,6 +130,7 @@ function realtorToPublic(row) {
     brokerage: row.brokerage,
     photoEmoji: row.photo_emoji,
     photoUrl: row.photo_url || null,
+    videoUrl: row.video_url || null,
     bio: row.bio,
     specialties: (row.specialties || '').split(',').filter(Boolean),
     areas: (row.areas || '').split(',').filter(Boolean),
@@ -139,6 +164,7 @@ function realtorToAdmin(row) {
     brokerage: row.brokerage || '',
     photoEmoji: row.photo_emoji || '',
     photoUrl: row.photo_url || null,
+    videoUrl: row.video_url || null,
     bio: row.bio || '',
     specialties: row.specialties || '',
     areas: row.areas || '',
@@ -268,7 +294,7 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { realtor: realtorToOwner(realtor) });
   }
 
-  // POST /api/agents/signup  { name, brokerage, email, phone, bio, specialties, areas, yearsExperience, photoEmoji }
+  // POST /api/agents/signup  { name, brokerage, email, phone, bio, specialties, areas, state, yearsExperience, photoEmoji }
   // Creates (or reuses a not-yet-paid) realtor row, then starts a Stripe subscription checkout.
   if (req.method === 'POST' && parts[1] === 'agents' && parts[2] === 'signup' && parts.length === 3) {
     const body = await readBody(req);
@@ -292,6 +318,7 @@ async function handleApi(req, res, url) {
       bio: (body.bio || '').trim(),
       specialties: Array.isArray(body.specialties) ? body.specialties.join(',') : (body.specialties || '').trim(),
       areas: Array.isArray(body.areas) ? body.areas.join(',') : (body.areas || '').trim(),
+      state: (body.state || '').trim().toUpperCase().slice(0, 2) || null,
       yearsExperience: body.yearsExperience ? Number(body.yearsExperience) : null,
       phone: (body.phone || '').trim(),
       email,
@@ -450,6 +477,53 @@ async function handleApi(req, res, url) {
       return sendJson(res, 200, { realtor: realtorToAdmin(updated) });
     }
 
+    // POST /api/admin/realtors/:id/video  -> upload/replace intro video.
+    // Body is the raw video bytes (not JSON/base64) — the browser sends the File object
+    // directly as the fetch body, with its MIME type in Content-Type. Keeps the upload path
+    // simple and avoids the ~33% size penalty base64 would add on top of an already-large file.
+    if (req.method === 'POST' && parts[2] === 'realtors' && parts[4] === 'video' && parts.length === 5) {
+      const id = Number(parts[3]);
+      const current = getAllRealtorsAdmin().find((r) => r.id === id);
+      if (!current) return sendJson(res, 404, { error: 'realtor not found' });
+
+      const contentType = String(req.headers['content-type'] || '').toLowerCase();
+      const ext = VIDEO_MIME_EXT[contentType];
+      if (!ext) return sendJson(res, 400, { error: 'Unsupported video type. Use MP4, MOV, or WEBM.' });
+
+      let buffer;
+      try {
+        buffer = await readRawBinaryBody(req, MAX_VIDEO_BYTES);
+      } catch (e) {
+        return sendJson(res, 413, { error: 'Video is too large (max 60MB).' });
+      }
+      if (!buffer.length) return sendJson(res, 400, { error: 'No video data provided.' });
+
+      const filename = `realtor-${id}-${Date.now()}${ext}`;
+      fs.writeFileSync(path.join(UPLOADS_DIR, filename), buffer);
+
+      // Best-effort cleanup of the previous video file so uploads don't accumulate forever.
+      if (current.video_url && current.video_url.startsWith('/uploads/')) {
+        const oldPath = path.join(UPLOADS_DIR, path.basename(current.video_url));
+        fs.unlink(oldPath, () => {});
+      }
+
+      const updated = setRealtorVideo(id, '/uploads/' + filename);
+      return sendJson(res, 200, { realtor: realtorToAdmin(updated) });
+    }
+
+    // DELETE /api/admin/realtors/:id/video  -> remove the intro video.
+    if (req.method === 'DELETE' && parts[2] === 'realtors' && parts[4] === 'video' && parts.length === 5) {
+      const id = Number(parts[3]);
+      const current = getAllRealtorsAdmin().find((r) => r.id === id);
+      if (!current) return sendJson(res, 404, { error: 'realtor not found' });
+      if (current.video_url && current.video_url.startsWith('/uploads/')) {
+        const oldPath = path.join(UPLOADS_DIR, path.basename(current.video_url));
+        fs.unlink(oldPath, () => {});
+      }
+      const updated = setRealtorVideo(id, null);
+      return sendJson(res, 200, { realtor: realtorToAdmin(updated) });
+    }
+
     // GET /api/admin/clients  -> every completed onboarding signup, matched or not.
     if (req.method === 'GET' && parts[2] === 'clients' && parts.length === 3) {
       const clients = getAllClientsAdmin().map((c) => ({
@@ -550,19 +624,51 @@ async function handleStripeWebhook(req, res) {
   return sendJson(res, 200, { received: true });
 }
 
-const UPLOAD_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp' };
+const UPLOAD_MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp',
+  '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
+};
 
+// Supports HTTP Range requests (206 Partial Content) — iOS/Safari's <video> element requires
+// this to play at all (WKWebView, which the Capacitor app runs on, refuses to play video
+// served without Range support), and it lets any browser seek/scrub instead of downloading
+// the whole clip up front.
 function serveUpload(req, res, pathname) {
   const filename = path.basename(pathname); // strips any path traversal attempts
   const fullPath = path.join(UPLOADS_DIR, filename);
   const ext = path.extname(fullPath);
-  fs.readFile(fullPath, (err, data) => {
-    if (err) { res.writeHead(404); return res.end('Not found'); }
-    res.writeHead(200, {
-      'Content-Type': UPLOAD_MIME[ext] || 'application/octet-stream',
+  const contentType = UPLOAD_MIME[ext] || 'application/octet-stream';
+
+  fs.stat(fullPath, (err, stats) => {
+    if (err || !stats.isFile()) { res.writeHead(404); return res.end('Not found'); }
+
+    const range = req.headers.range;
+    if (!range) {
+      res.writeHead(200, {
+        'Content-Type': contentType,
+        'Content-Length': stats.size,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'public, max-age=86400',
+      });
+      return fs.createReadStream(fullPath).pipe(res);
+    }
+
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+    if (!match) { res.writeHead(416, { 'Content-Range': `bytes */${stats.size}` }); return res.end(); }
+    let start = match[1] ? parseInt(match[1], 10) : 0;
+    let end = match[2] ? parseInt(match[2], 10) : stats.size - 1;
+    if (Number.isNaN(start) || Number.isNaN(end) || start > end || end >= stats.size) {
+      res.writeHead(416, { 'Content-Range': `bytes */${stats.size}` });
+      return res.end();
+    }
+    res.writeHead(206, {
+      'Content-Type': contentType,
+      'Content-Length': end - start + 1,
+      'Content-Range': `bytes ${start}-${end}/${stats.size}`,
+      'Accept-Ranges': 'bytes',
       'Cache-Control': 'public, max-age=86400',
     });
-    res.end(data);
+    fs.createReadStream(fullPath, { start, end }).pipe(res);
   });
 }
 
