@@ -19,6 +19,7 @@ const {
   setRealtorPhoto,
   setRealtorVideo,
   getAllClientsAdmin,
+  getAdminStats,
   createSession,
   getSession,
   deleteSession,
@@ -770,6 +771,12 @@ async function handleApi(req, res, url) {
   // Every other /api/admin/* route requires the X-Admin-Password header on each request.
   if (parts[1] === 'admin') {
     if (!checkAdminAuth(req)) return sendJson(res, 401, { error: 'Unauthorized' });
+
+    // GET /api/admin/stats  -> headline counts for the admin dashboard (total/active agents,
+    // total signups, how many clients have matched with at least one agent).
+    if (req.method === 'GET' && parts[2] === 'stats' && parts.length === 3) {
+      return sendJson(res, 200, { stats: getAdminStats() });
+    }
 
     // GET /api/admin/realtors  -> full roster, including inactive/pending agents.
     if (req.method === 'GET' && parts[2] === 'realtors' && parts.length === 3) {

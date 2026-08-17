@@ -364,6 +364,26 @@ function getAllClientsAdmin() {
   return db.prepare('SELECT * FROM clients ORDER BY created_at DESC').all();
 }
 
+// Headline counts for the admin dashboard. Kept as simple COUNT(*) queries (SQLite handles
+// these instantly even at real-world scale for this app) rather than caching, since the admin
+// panel is low-traffic and always wants a fresh number.
+function getAdminStats() {
+  const realtorTotals = db.prepare(`
+    SELECT COUNT(*) AS total, SUM(CASE WHEN subscription_status = 'active' THEN 1 ELSE 0 END) AS active
+    FROM realtors
+  `).get();
+  const clientTotals = db.prepare('SELECT COUNT(*) AS total FROM clients').get();
+  const matchedClients = db.prepare(`
+    SELECT COUNT(DISTINCT client_id) AS total FROM swipes WHERE direction = 'like'
+  `).get();
+  return {
+    totalRealtors: realtorTotals.total || 0,
+    activeRealtors: realtorTotals.active || 0,
+    totalClients: clientTotals.total || 0,
+    matchedClients: matchedClients.total || 0,
+  };
+}
+
 // Sets (or clears, when photoUrl is null) an uploaded profile photo, independent of the
 // text-field form save so a photo upload never accidentally clobbers other fields.
 function setRealtorPhoto(id, photoUrl) {
@@ -604,6 +624,7 @@ module.exports = {
   setRealtorPhoto,
   setRealtorVideo,
   getAllClientsAdmin,
+  getAdminStats,
   // sessions
   createSession,
   getSession,
