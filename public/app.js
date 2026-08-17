@@ -64,10 +64,33 @@
   }
 
   // ---------------- Onboarding ----------------
-  // Step 1 asks where the client is looking (state required, city optional) so the swipe
-  // deck can be scoped to agents who actually serve that state. Step 2 collects the rest.
+  // First-run entry point: a Tinder-style splash (big wordmark, tagline, card-stack
+  // visual, single CTA) rather than dropping straight into a form. Step 1 (state/zip) and
+  // step 2 (details) follow after "Get Started".
   function renderOnboarding() {
-    renderLocationStep();
+    renderSplash();
+  }
+
+  function renderSplash() {
+    app.innerHTML = '';
+    app.appendChild(el(`
+      <div class="screen splash">
+        <div class="splash-cards" aria-hidden="true">
+          <div class="splash-card c1"></div>
+          <div class="splash-card c2"></div>
+          <div class="splash-card c3"></div>
+        </div>
+        <div class="splash-content">
+          <div class="splash-logo">Agen<span class="accent">tr</span></div>
+          <h1 class="splash-tagline">Find Your<br/><span class="accent">Agent</span>.</h1>
+          <p class="splash-sub">Swipe through real agent profiles and match with the right one for you. Free, no obligation.</p>
+          <button class="btn btn-primary splash-cta" id="splash-start" type="button">Get Started</button>
+          <p class="hint">Real estate agent? <a href="/agent-signup.html" style="color:#fff;">List your profile — $49/mo</a></p>
+          <p class="hint" style="margin-top:-4px;"><a href="/privacy.html" style="color:rgba(255,255,255,0.5);">Privacy Policy</a></p>
+        </div>
+      </div>
+    `));
+    document.getElementById('splash-start').addEventListener('click', () => renderLocationStep());
   }
 
   function renderLocationStep() {

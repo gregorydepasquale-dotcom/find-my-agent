@@ -56,6 +56,95 @@ html, body {
 }
 .brand .accent { color: var(--gold); }
 
+/* ---------- Splash (Tinder-style landing screen) ---------- */
+.splash {
+  position: relative;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  overflow: hidden;
+  padding: 20px;
+}
+.splash::before {
+  /* Vignette so the card stack fades into the background instead of hard-cutting at
+     the screen edges. */
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(60% 55% at 50% 42%, transparent 40%, var(--bg-1) 92%);
+  pointer-events: none;
+}
+.splash-cards {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.splash-card {
+  position: absolute;
+  width: 220px;
+  height: 320px;
+  border-radius: 28px;
+  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+}
+.splash-card.c1 {
+  background: linear-gradient(150deg, var(--gold), var(--accent) 75%);
+  opacity: 0.26;
+  transform: rotate(-16deg) translate(-96px, -6px) scale(0.96);
+}
+.splash-card.c2 {
+  background: linear-gradient(20deg, var(--accent), var(--gold) 80%);
+  opacity: 0.26;
+  transform: rotate(13deg) translate(96px, 4px) scale(0.96);
+}
+.splash-card.c3 {
+  background: linear-gradient(180deg, var(--gold), var(--accent-2) 60%, var(--accent) 100%);
+  opacity: 0.4;
+  transform: rotate(-2deg) translate(0, -22px);
+}
+.splash-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.splash-logo {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: white;
+  margin-bottom: 16px;
+}
+.splash-logo .accent { color: var(--gold); }
+.splash-tagline {
+  font-size: 50px;
+  line-height: 1.04;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin: 0 0 8px;
+  text-shadow: 0 4px 24px rgba(0,0,0,0.4);
+}
+.splash-tagline .accent { color: var(--gold); }
+.splash-sub {
+  color: rgba(255,255,255,0.8);
+  font-size: 15.5px;
+  line-height: 1.5;
+  max-width: 300px;
+  margin: 0 0 22px;
+}
+.splash-cta {
+  width: 100%;
+  max-width: 280px;
+  font-size: 17px;
+  padding: 18px 20px;
+  box-shadow: 0 12px 32px rgba(180,81,50,0.45);
+}
+
 /* ---------- Onboarding ---------- */
 .screen {
   flex: 1;
