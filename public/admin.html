@@ -41,6 +41,11 @@
   .photo-controls { display: flex; flex-direction: column; gap: 6px; flex: 1; }
   .photo-controls input[type=file] { font-size: 12.5px; color: rgba(255,255,255,0.7); }
   .remove-photo-btn { align-self: flex-start; background: none; border: none; color: rgba(255,255,255,0.55); font-size: 12px; text-decoration: underline; cursor: pointer; padding: 0; }
+  .video-row { display: flex; align-items: center; gap: 14px; }
+  .video-preview { width: 120px; height: 80px; border-radius: 10px; background: #000; object-fit: cover; flex-shrink: 0; }
+  .video-preview-empty { width: 120px; height: 80px; border-radius: 10px; background: rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: center; font-size: 12px; color: rgba(255,255,255,0.4); flex-shrink: 0; text-align: center; }
+  .remove-video-btn { align-self: flex-start; background: none; border: none; color: rgba(255,255,255,0.55); font-size: 12px; text-decoration: underline; cursor: pointer; padding: 0; }
+  .upload-progress { font-size: 12px; color: rgba(255,255,255,0.5); }
   .admin-tabs { display: flex; gap: 8px; margin-bottom: 18px; }
   .admin-tabs button { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12); color: rgba(255,255,255,0.75); border-radius: 999px; padding: 8px 16px; font-size: 13px; font-weight: 700; cursor: pointer; }
   .admin-tabs button.active { background: var(--gold); border-color: var(--gold); color: #201436; }
@@ -104,6 +109,21 @@
       return data;
     }
 
+    // Video uploads go straight through as the raw file body (not JSON/base64) — large clips
+    // would otherwise blow past reasonable JSON payload sizes and pay a ~33% base64 penalty.
+    async function adminUploadVideo(path, file) {
+      const pw = sessionStorage.getItem(PW_KEY) || '';
+      const res = await fetch('/api/admin' + path, {
+        method: 'POST',
+        headers: { 'Content-Type': file.type, 'X-Admin-Password': pw },
+        body: file,
+      });
+      if (res.status === 401) { sessionStorage.removeItem(PW_KEY); renderLogin('Session expired — log in again.'); throw new Error('unauthorized'); }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      return data;
+    }
+
     function renderLogin(errorMsg) {
       root.innerHTML = '';
       root.appendChild(el(`
@@ -145,7 +165,7 @@
     }
 
     function emptyForm() {
-      return { name: '', brokerage: '', photoEmoji: '🏠', photoUrl: null, bio: '', specialties: '', areas: '', yearsExperience: '', closedSales: '', rating: '', phone: '', email: '', subscriptionStatus: 'active', state: '' };
+      return { name: '', brokerage: '', photoEmoji: '🏠', photoUrl: null, videoUrl: null, bio: '', specialties: '', areas: '', yearsExperience: '', closedSales: '', rating: '', phone: '', email: '', subscriptionStatus: 'active', state: '' };
     }
 
     // Reads a File as base64 + its MIME type, for JSON-embedded photo uploads (keeps the
@@ -181,9 +201,29 @@
       `;
     }
 
+    function videoRowHtml(r) {
+      const preview = r.videoUrl
+        ? `<video class="video-preview" src="${esc(r.videoUrl)}" muted playsinline controls></video>`
+        : `<div class="video-preview-empty">No video</div>`;
+      return `
+        <div class="field">
+          <label>Intro video (MP4, MOV, or WEBM — max 60MB)</label>
+          <div class="video-row">
+            <div class="video-preview-wrap">${preview}</div>
+            <div class="photo-controls">
+              <input type="file" name="videoFile" accept="video/mp4,video/quicktime,video/webm" />
+              <span class="upload-progress" style="display:none;">Uploading…</span>
+              ${r.videoUrl ? '<button type="button" class="remove-video-btn">Remove video</button>' : ''}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
     function fieldsHtml(r, idPrefix) {
       return `
         ${photoRowHtml(r)}
+        ${videoRowHtml(r)}
         <div class="grid-2">
           <div class="field"><label>Name</label><input name="name" value="${esc(r.name)}" required /></div>
           <div class="field"><label>Fallback emoji</label><input name="photoEmoji" value="${esc(r.photoEmoji)}" maxlength="4" /></div>
@@ -287,6 +327,7 @@
           const btn = e.target.querySelector('button[type=submit]');
           err.style.display = 'none';
           const photoFile = e.target.querySelector('input[name=photoFile]').files[0];
+          const videoFile = e.target.querySelector('input[name=videoFile]').files[0];
           try {
             btn.disabled = true; btn.textContent = 'Creating…';
             const { realtor } = await adminApi('/realtors', { method: 'POST', body: formValues(e.target) });
@@ -294,6 +335,10 @@
               btn.textContent = 'Uploading photo…';
               const { base64, contentType } = await fileToBase64(photoFile);
               await adminApi('/realtors/' + realtor.id + '/photo', { method: 'POST', body: { imageBase64: base64, contentType } });
+            }
+            if (videoFile) {
+              btn.textContent = 'Uploading video…';
+              await adminUploadVideo('/realtors/' + realtor.id + '/video', videoFile);
             }
             wrap.innerHTML = '';
             loadList();
@@ -378,6 +423,32 @@
             removeBtn.addEventListener('click', async () => {
               try {
                 await adminApi('/realtors/' + r.id + '/photo', { method: 'DELETE' });
+                loadList();
+              } catch (ex) {
+                errBox.textContent = ex.message; errBox.style.display = 'block';
+              }
+            });
+          }
+          const videoInput = card.querySelector('input[name=videoFile]');
+          const uploadProgress = card.querySelector('.upload-progress');
+          videoInput.addEventListener('change', async () => {
+            const file = videoInput.files[0];
+            if (!file) return;
+            errBox.style.display = 'none'; saveMsg.style.display = 'none';
+            uploadProgress.style.display = 'inline';
+            try {
+              await adminUploadVideo('/realtors/' + r.id + '/video', file);
+              loadList();
+            } catch (ex) {
+              uploadProgress.style.display = 'none';
+              errBox.textContent = ex.message; errBox.style.display = 'block';
+            }
+          });
+          const removeVideoBtn = card.querySelector('.remove-video-btn');
+          if (removeVideoBtn) {
+            removeVideoBtn.addEventListener('click', async () => {
+              try {
+                await adminApi('/realtors/' + r.id + '/video', { method: 'DELETE' });
                 loadList();
               } catch (ex) {
                 errBox.textContent = ex.message; errBox.style.display = 'block';

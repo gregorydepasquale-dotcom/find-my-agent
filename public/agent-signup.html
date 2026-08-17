@@ -78,8 +78,12 @@
           <input type="text" name="specialties" placeholder="Buyers, First-Time Buyers, Condos" />
         </div>
         <div class="field">
-          <label>Areas you serve (comma-separated)</label>
-          <input type="text" name="areas" placeholder="Downtown, Southside" />
+          <label>State you serve</label>
+          <select name="state" id="state-select" required></select>
+        </div>
+        <div class="field">
+          <label>Cities / zip codes you serve (comma-separated)</label>
+          <input type="text" name="areas" placeholder="e.g. Austin, Round Rock, 78701" />
         </div>
         <div class="field">
           <label>Short bio</label>
@@ -92,6 +96,23 @@
   </div>
   <script>
     (function () {
+      const US_STATES = [
+        ['AL', 'Alabama'], ['AK', 'Alaska'], ['AZ', 'Arizona'], ['AR', 'Arkansas'], ['CA', 'California'],
+        ['CO', 'Colorado'], ['CT', 'Connecticut'], ['DE', 'Delaware'], ['DC', 'District of Columbia'],
+        ['FL', 'Florida'], ['GA', 'Georgia'], ['HI', 'Hawaii'], ['ID', 'Idaho'], ['IL', 'Illinois'],
+        ['IN', 'Indiana'], ['IA', 'Iowa'], ['KS', 'Kansas'], ['KY', 'Kentucky'], ['LA', 'Louisiana'],
+        ['ME', 'Maine'], ['MD', 'Maryland'], ['MA', 'Massachusetts'], ['MI', 'Michigan'], ['MN', 'Minnesota'],
+        ['MS', 'Mississippi'], ['MO', 'Missouri'], ['MT', 'Montana'], ['NE', 'Nebraska'], ['NV', 'Nevada'],
+        ['NH', 'New Hampshire'], ['NJ', 'New Jersey'], ['NM', 'New Mexico'], ['NY', 'New York'],
+        ['NC', 'North Carolina'], ['ND', 'North Dakota'], ['OH', 'Ohio'], ['OK', 'Oklahoma'], ['OR', 'Oregon'],
+        ['PA', 'Pennsylvania'], ['RI', 'Rhode Island'], ['SC', 'South Carolina'], ['SD', 'South Dakota'],
+        ['TN', 'Tennessee'], ['TX', 'Texas'], ['UT', 'Utah'], ['VT', 'Vermont'], ['VA', 'Virginia'],
+        ['WA', 'Washington'], ['WV', 'West Virginia'], ['WI', 'Wisconsin'], ['WY', 'Wyoming'],
+      ];
+      document.getElementById('state-select').innerHTML =
+        '<option value="">Select a state…</option>' +
+        US_STATES.map(([code, name]) => `<option value="${code}">${name}</option>`).join('');
+
       const params = new URLSearchParams(window.location.search);
       const errorBanner = document.getElementById('error-banner');
       if (params.get('canceled')) {
@@ -118,6 +139,7 @@
               yearsExperience: fd.get('yearsExperience'),
               specialties: fd.get('specialties'),
               areas: fd.get('areas'),
+              state: fd.get('state'),
               bio: fd.get('bio'),
             }),
           });

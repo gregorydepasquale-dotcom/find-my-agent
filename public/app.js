@@ -83,8 +83,8 @@
             <select name="state" required>${stateOptionsHtml()}</select>
           </div>
           <div class="field">
-            <label>City (optional)</label>
-            <input type="text" name="city" placeholder="e.g. Austin" />
+            <label>City or zip code (optional)</label>
+            <input type="text" name="city" placeholder="e.g. Austin or 78701" />
           </div>
           <button class="btn btn-primary" type="submit">Continue →</button>
         </form>
@@ -286,6 +286,7 @@
           <div class="card-photo">
             ${r.photoUrl ? `<img src="${esc(r.photoUrl)}" alt="${esc(r.name)}" />` : `<span>${esc(r.photoEmoji || '🏠')}</span>`}
             <span class="badge">★ ${r.rating != null ? r.rating.toFixed(1) : '—'}</span>
+            ${r.videoUrl ? `<button type="button" class="play-video-btn" aria-label="Watch intro video">▶</button>` : ''}
             <div class="stamp like">MATCH</div>
             <div class="stamp nope">PASS</div>
           </div>
@@ -301,7 +302,37 @@
           </div>
         </div>
       `);
+      const playBtn = card.querySelector('.play-video-btn');
+      if (playBtn) {
+        // Stop the tap from also being interpreted as the start of a swipe drag.
+        playBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+        playBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          showVideoModal(r);
+        });
+      }
       return card;
+    }
+
+    function showVideoModal(r) {
+      const modal = el(`
+        <div class="modal-backdrop">
+          <div class="modal-card" style="padding:16px;">
+            <video src="${esc(r.videoUrl)}" controls autoplay playsinline style="width:100%; border-radius:14px; max-height:70vh; background:#000;"></video>
+            <h2 style="margin-top:14px;">${esc(r.name)}</h2>
+            <button class="btn btn-primary" id="video-modal-close" style="width:100%;">Close</button>
+          </div>
+        </div>
+      `);
+      document.body.appendChild(modal);
+      const video = modal.querySelector('video');
+      modal.querySelector('#video-modal-close').addEventListener('click', () => {
+        video.pause();
+        modal.remove();
+      });
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) { video.pause(); modal.remove(); }
+      });
     }
 
     function attachDrag(card, realtor) {
@@ -427,10 +458,18 @@
               ${m.phone ? `<a href="tel:${esc(m.phone.replace(/[^\d+]/g, ''))}">📞 Call</a>` : ''}
               ${m.phone ? `<a href="sms:${esc(m.phone.replace(/[^\d+]/g, ''))}">💬 Text</a>` : ''}
               ${m.email ? `<a href="mailto:${esc(m.email)}">✉️ Email</a>` : ''}
+              ${m.videoUrl ? `<a href="#" class="watch-video-link" data-realtor-id="${m.id}">▶ Watch intro</a>` : ''}
             </div>
           </div>
         `).join('');
         shell(`<div class="screen" style="padding-top:16px;">${items}</div>`);
+        document.querySelectorAll('.watch-video-link').forEach((link) => {
+          link.addEventListener('click', (e) => {
+            e.preventDefault();
+            const m = matches.find((x) => String(x.id) === link.dataset.realtorId);
+            if (m) showVideoModal(m);
+          });
+        });
       }).catch(() => {
         shell(`<div class="screen"><p>Couldn't load matches. Try again.</p></div>`);
       });

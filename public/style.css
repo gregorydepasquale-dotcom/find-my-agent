@@ -163,6 +163,23 @@ html, body {
   font-size: 13px;
   font-weight: 700;
 }
+.card-photo .play-video-btn {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.45);
+  color: white;
+  border: 2px solid rgba(255,255,255,0.8);
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0 0 0 3px;
+}
 .card-body {
   flex: 1;
   padding: 16px 18px;
