@@ -314,6 +314,40 @@
               <option value="rent">Rent</option>
             </select>
           </div>
+          <p class="hint" style="margin: 2px 0 -4px;">A few optional questions that help us find your best-fit agent. Skip anything you're not sure about — you can always start swiping right away.</p>
+          <div class="field">
+            <label>Timeline (optional)</label>
+            <select name="timeline">
+              <option value="">No preference</option>
+              <option value="ASAP">ASAP</option>
+              <option value="1-3 months">1–3 months</option>
+              <option value="3-6 months">3–6 months</option>
+              <option value="Just researching">Just researching</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Budget (optional)</label>
+            <select name="budget">
+              <option value="">No preference</option>
+              <option value="Under $200k">Under $200k</option>
+              <option value="$200k-$400k">$200k–$400k</option>
+              <option value="$400k-$600k">$400k–$600k</option>
+              <option value="$600k-$800k">$600k–$800k</option>
+              <option value="$800k-$1M">$800k–$1M</option>
+              <option value="$1M+">$1M+</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Property type (optional)</label>
+            <select name="propertyType">
+              <option value="">No preference</option>
+              <option value="Single-family home">Single-family home</option>
+              <option value="Condo/Townhouse">Condo/Townhouse</option>
+              <option value="Multi-family">Multi-family</option>
+              <option value="Land">Land</option>
+              <option value="New construction">New construction</option>
+            </select>
+          </div>
           <button class="btn btn-primary" type="submit">Start swiping →</button>
         </form>
       </div>
@@ -328,7 +362,14 @@
       try {
         await api('/clients/me', {
           method: 'PATCH',
-          body: { intent: fd.get('intent'), area: fd.get('city'), state: fd.get('state') },
+          body: {
+            intent: fd.get('intent'),
+            area: fd.get('city'),
+            state: fd.get('state'),
+            timeline: fd.get('timeline'),
+            budget: fd.get('budget'),
+            propertyType: fd.get('propertyType'),
+          },
         });
         renderClientApp(clientId);
       } catch (err) {
@@ -677,6 +718,7 @@
               <h3>${esc(l.name)}</h3>
               <div class="meta">${l.phone ? '📞 ' + esc(l.phone) : ''} ${l.email ? ' · ✉️ ' + esc(l.email) : ''}</div>
               <div class="meta">${l.areaInterest || l.state ? '📍 ' + esc([l.areaInterest, l.state].filter(Boolean).join(', ')) : ''}</div>
+              <div class="meta">${esc([l.budgetRange, l.timeline, l.propertyType].filter(Boolean).join(' · '))}</div>
               <span class="pill">${esc(l.intent || 'interested')}</span>
             </div>
           `).join('')
