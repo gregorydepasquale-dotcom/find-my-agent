@@ -6,6 +6,8 @@
 <title>List your agency — Agentr</title>
 <link rel="icon" href="/img/favicon.png" />
 <link rel="stylesheet" href="/style.css" />
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js" async defer></script>
 <style>
   .field textarea {
     padding: 14px 16px;
@@ -52,6 +54,9 @@
 
       <div class="error-banner" id="error-banner"></div>
 
+      <div id="oauth-container"></div>
+      <div class="divider"><span>or</span></div>
+
       <form id="signup-form" style="display:flex; flex-direction:column; gap:14px;">
         <div class="field">
           <label>Your name</label>
@@ -64,6 +69,10 @@
         <div class="field">
           <label>Email</label>
           <input type="email" name="email" placeholder="jane@example.com" required />
+        </div>
+        <div class="field" id="password-field">
+          <label>Password</label>
+          <input type="password" name="password" placeholder="At least 8 characters" minlength="8" />
         </div>
         <div class="field">
           <label>Phone</label>
@@ -91,11 +100,84 @@
         </div>
         <button class="btn btn-primary" type="submit">Continue to payment →</button>
       </form>
+      <p class="hint">Already listed? <a href="/realtor-login.html" style="color:#fff;">Log in</a></p>
       <p class="hint"><a href="/" style="color:rgba(255,255,255,0.6);">← Back to client view</a></p>
     </div>
   </div>
   <script>
     (function () {
+      function decodeJwtPayload(token) {
+        try {
+          const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+          return JSON.parse(decodeURIComponent(atob(b64).split('').map((c) =>
+            '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')));
+        } catch (e) { return {}; }
+      }
+
+      function waitForGlobal(check, tries, interval) {
+        return new Promise((resolve) => {
+          (function attempt(n) {
+            if (check()) return resolve(true);
+            if (n <= 0) return resolve(false);
+            setTimeout(() => attempt(n - 1), interval || 250);
+          })(tries == null ? 16 : tries);
+        });
+      }
+
+      let oauthToken = null; // { provider, idToken }
+
+      async function setupOAuthButtons() {
+        let cfg;
+        try { cfg = await fetch('/api/auth/config').then((r) => r.json()); }
+        catch (e) { return; }
+        if (!cfg.googleClientId && !cfg.appleServicesId) return;
+        const row = document.createElement('div');
+        row.className = 'oauth-row';
+        document.getElementById('oauth-container').appendChild(row);
+
+        function onToken(provider, idToken) {
+          oauthToken = { provider, idToken };
+          const payload = decodeJwtPayload(idToken);
+          document.querySelector('input[name=email]').value = payload.email || '';
+          document.querySelector('input[name=email]').readOnly = true;
+          if (payload.name) document.querySelector('input[name=name]').value = payload.name;
+          document.getElementById('password-field').style.display = 'none';
+          document.querySelector('input[name=password]').required = false;
+          document.querySelector('#signup-form button[type=submit]').textContent = 'Continue to payment →';
+        }
+
+        if (cfg.googleClientId && await waitForGlobal(() => window.google && window.google.accounts && window.google.accounts.id)) {
+          const slot = document.createElement('div');
+          slot.className = 'oauth-btn-slot';
+          row.appendChild(slot);
+          window.google.accounts.id.initialize({ client_id: cfg.googleClientId, callback: (r) => onToken('google', r.credential) });
+          window.google.accounts.id.renderButton(slot, { theme: 'filled_black', size: 'large', shape: 'pill', width: 260 });
+        }
+        if (cfg.appleServicesId && await waitForGlobal(() => window.AppleID && window.AppleID.auth)) {
+          window.AppleID.auth.init({
+            clientId: cfg.appleServicesId, scope: 'name email',
+            redirectURI: cfg.appleRedirectUri || window.location.origin, usePopup: true,
+          });
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-apple';
+          btn.textContent = ' Continue with Apple';
+          row.appendChild(btn);
+          btn.addEventListener('click', async () => {
+            try {
+              const data = await window.AppleID.auth.signIn();
+              if (data.user && data.user.name) {
+                document.querySelector('input[name=name]').value = `${data.user.name.firstName || ''} ${data.user.name.lastName || ''}`.trim();
+              }
+              onToken('apple', data.authorization.id_token);
+            } catch (e) {
+              if (e && e.error !== 'popup_closed_by_user') alert('Apple sign-in failed. Please try again.');
+            }
+          });
+        }
+      }
+      setupOAuthButtons();
+
       const US_STATES = [
         ['AL', 'Alabama'], ['AK', 'Alaska'], ['AZ', 'Arizona'], ['AR', 'Arkansas'], ['CA', 'California'],
         ['CO', 'Colorado'], ['CT', 'Connecticut'], ['DE', 'Delaware'], ['DC', 'District of Columbia'],
@@ -124,9 +206,14 @@
         e.preventDefault();
         const fd = new FormData(e.target);
         const btn = e.target.querySelector('button');
+        errorBanner.style.display = 'none';
+        if (!oauthToken && String(fd.get('password') || '').length < 8) {
+          errorBanner.textContent = 'Password must be at least 8 characters.';
+          errorBanner.style.display = 'block';
+          return;
+        }
         btn.disabled = true;
         btn.textContent = 'Redirecting to payment…';
-        errorBanner.style.display = 'none';
         try {
           const res = await fetch('/api/agents/signup', {
             method: 'POST',
@@ -135,6 +222,9 @@
               name: fd.get('name'),
               brokerage: fd.get('brokerage'),
               email: fd.get('email'),
+              password: oauthToken ? undefined : fd.get('password'),
+              googleIdToken: oauthToken && oauthToken.provider === 'google' ? oauthToken.idToken : undefined,
+              appleIdToken: oauthToken && oauthToken.provider === 'apple' ? oauthToken.idToken : undefined,
               phone: fd.get('phone'),
               yearsExperience: fd.get('yearsExperience'),
               specialties: fd.get('specialties'),

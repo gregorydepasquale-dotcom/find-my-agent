@@ -1,9 +1,9 @@
-// app.js — vanilla JS SPA. No build step, no framework, no external deps.
+// app.js — vanilla JS SPA. No build step, no framework, no external deps (beyond the
+// optional Google/Apple sign-in SDKs, loaded from index.html and only used if configured).
 (function () {
   'use strict';
 
   const app = document.getElementById('app');
-  const LS_KEY = 'realtorSwipe.clientId';
 
   const US_STATES = [
     ['AL', 'Alabama'], ['AK', 'Alaska'], ['AZ', 'Arizona'], ['AR', 'Arkansas'], ['CA', 'California'],
@@ -48,6 +48,78 @@
     }[c]));
   }
 
+  // ---------------- Google / Apple sign-in (progressive — buttons only appear once the
+  // server reports GOOGLE_CLIENT_ID / APPLE_SERVICES_ID are configured) ----------------
+  let authConfigPromise = null;
+  function getAuthConfig() {
+    if (!authConfigPromise) {
+      authConfigPromise = api('/auth/config').catch(() => ({ googleClientId: null, appleServicesId: null, appleRedirectUri: null }));
+    }
+    return authConfigPromise;
+  }
+
+  function waitForGlobal(check, tries, interval) {
+    return new Promise((resolve) => {
+      (function attempt(n) {
+        if (check()) return resolve(true);
+        if (n <= 0) return resolve(false);
+        setTimeout(() => attempt(n - 1), interval || 250);
+      })(tries == null ? 16 : tries);
+    });
+  }
+
+  // Renders Google + Apple buttons into `container` when configured. `onToken(provider,
+  // idToken, displayName)` is called on success; displayName is only ever non-null the very
+  // first time someone signs in with Apple (Apple only sends the name once, per its API).
+  async function renderOAuthButtons(container, onToken) {
+    const cfg = await getAuthConfig();
+    if (!cfg.googleClientId && !cfg.appleServicesId) return;
+
+    const row = el(`<div class="oauth-row"></div>`);
+    container.appendChild(row);
+
+    if (cfg.googleClientId) {
+      const ready = await waitForGlobal(() => window.google && window.google.accounts && window.google.accounts.id);
+      if (ready) {
+        const slot = el(`<div class="oauth-btn-slot"></div>`);
+        row.appendChild(slot);
+        try {
+          window.google.accounts.id.initialize({
+            client_id: cfg.googleClientId,
+            callback: (resp) => onToken('google', resp.credential, null),
+          });
+          window.google.accounts.id.renderButton(slot, { theme: 'filled_black', size: 'large', shape: 'pill', width: 260 });
+        } catch (e) { /* non-fatal — button just won't appear */ }
+      }
+    }
+
+    if (cfg.appleServicesId) {
+      const ready = await waitForGlobal(() => window.AppleID && window.AppleID.auth);
+      if (ready) {
+        try {
+          window.AppleID.auth.init({
+            clientId: cfg.appleServicesId,
+            scope: 'name email',
+            redirectURI: cfg.appleRedirectUri || window.location.origin,
+            usePopup: true,
+          });
+          const btn = el(`<button type="button" class="btn btn-apple"> Continue with Apple</button>`);
+          row.appendChild(btn);
+          btn.addEventListener('click', async () => {
+            try {
+              const data = await window.AppleID.auth.signIn();
+              const u = data.user && data.user.name;
+              const name = u ? `${u.firstName || ''} ${u.lastName || ''}`.trim() || null : null;
+              onToken('apple', data.authorization.id_token, name);
+            } catch (e) {
+              if (e && e.error !== 'popup_closed_by_user') alert('Apple sign-in failed. Please try again.');
+            }
+          });
+        } catch (e) { /* non-fatal */ }
+      }
+    }
+  }
+
   // ---------------- Router ----------------
   const path = window.location.pathname;
   const realtorDashMatch = path.match(/^\/realtor\/(\d+)/);
@@ -55,18 +127,25 @@
   if (realtorDashMatch) {
     renderRealtorDashboard(Number(realtorDashMatch[1]));
   } else {
-    const savedClientId = localStorage.getItem(LS_KEY);
-    if (savedClientId) {
-      renderClientApp(Number(savedClientId));
-    } else {
-      renderOnboarding();
+    boot();
+  }
+
+  async function boot() {
+    try {
+      const me = await api('/auth/me');
+      if (me.role === 'client') {
+        renderClientApp(me.client.id);
+        return;
+      }
+    } catch (e) {
+      // not signed in — fall through to the splash screen
     }
+    renderOnboarding();
   }
 
   // ---------------- Onboarding ----------------
   // First-run entry point: a Tinder-style splash (big wordmark, tagline, card-stack
-  // visual, single CTA) rather than dropping straight into a form. Step 1 (state/zip) and
-  // step 2 (details) follow after "Get Started".
+  // visual, single CTA) rather than dropping straight into a form.
   function renderOnboarding() {
     renderSplash();
   }
@@ -85,22 +164,139 @@
           <h1 class="splash-tagline">Find Your<br/><span class="accent">Agent</span>.</h1>
           <p class="splash-sub">Swipe through real agent profiles and match with the right one for you. Free, no obligation.</p>
           <button class="btn btn-primary splash-cta" id="splash-start" type="button">Get Started</button>
+          <p class="hint">Already have an account? <a href="#" id="splash-login" style="color:#fff;">Log in</a></p>
           <p class="hint">Real estate agent? <a href="/agent-signup.html" style="color:#fff;">List your profile — $49/mo</a></p>
           <p class="hint" style="margin-top:-4px;"><a href="/privacy.html" style="color:rgba(255,255,255,0.5);">Privacy Policy</a></p>
         </div>
       </div>
     `));
-    document.getElementById('splash-start').addEventListener('click', () => renderLocationStep());
+    document.getElementById('splash-start').addEventListener('click', () => renderAuthScreen('signup'));
+    document.getElementById('splash-login').addEventListener('click', (e) => { e.preventDefault(); renderAuthScreen('login'); });
   }
 
-  function renderLocationStep() {
+  // ---------------- Client auth (signup / login, shared screen) ----------------
+  function renderAuthScreen(mode) {
+    const isSignup = mode === 'signup';
     app.innerHTML = '';
     app.appendChild(el(`
       <div class="screen onboarding">
         <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
-        <h1>Where are you<br/>looking?</h1>
-        <p class="sub">We'll match you with agents who serve that area.</p>
-        <form id="location-form" style="display:flex; flex-direction:column; gap:14px;">
+        <h1>${isSignup ? 'Create your<br/>account.' : 'Welcome<br/>back.'}</h1>
+        <p class="sub">${isSignup ? "We'll save your matches so you can pick up right where you left off." : 'Log in to see your matches and keep swiping.'}</p>
+        <div id="oauth-container"></div>
+        <div class="divider"><span>or</span></div>
+        <div class="error-banner" id="auth-error" style="display:none;"></div>
+        <form id="auth-form" style="display:flex; flex-direction:column; gap:14px;">
+          ${isSignup ? `
+            <div class="field"><label>Your name</label><input type="text" name="name" placeholder="Jane Smith" required /></div>
+            <div class="field"><label>Phone (optional)</label><input type="tel" name="phone" placeholder="(423) 555-0100" /></div>
+          ` : ''}
+          <div class="field"><label>Email</label><input type="email" name="email" placeholder="jane@example.com" required /></div>
+          <div class="field"><label>Password</label><input type="password" name="password" placeholder="${isSignup ? 'At least 8 characters' : '••••••••'}" minlength="8" required /></div>
+          <button class="btn btn-primary" type="submit">${isSignup ? 'Create account →' : 'Log in →'}</button>
+          ${!isSignup ? `<p class="hint" style="margin:-6px 0 0;"><a href="#" id="forgot-link" style="color:#fff;">Forgot password?</a></p>` : ''}
+        </form>
+        <p class="hint">${isSignup ? 'Already have an account?' : "Don't have an account?"} <a href="#" id="mode-toggle" style="color:#fff;">${isSignup ? 'Log in' : 'Sign up'}</a></p>
+      </div>
+    `));
+
+    const errorBanner = document.getElementById('auth-error');
+    function showError(msg) { errorBanner.textContent = msg; errorBanner.style.display = 'block'; }
+
+    document.getElementById('mode-toggle').addEventListener('click', (e) => { e.preventDefault(); renderAuthScreen(isSignup ? 'login' : 'signup'); });
+    const forgotLink = document.getElementById('forgot-link');
+    if (forgotLink) forgotLink.addEventListener('click', (e) => { e.preventDefault(); renderForgotPassword('client', () => renderAuthScreen('login')); });
+
+    renderOAuthButtons(document.getElementById('oauth-container'), async (provider, idToken, name) => {
+      errorBanner.style.display = 'none';
+      try {
+        const { client, isNew } = await api('/auth/client/oauth', { method: 'POST', body: { provider, idToken, name } });
+        if (isNew) renderCompleteProfile(client.id);
+        else renderClientApp(client.id);
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+
+    document.getElementById('auth-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const btn = e.target.querySelector('button[type=submit]');
+      btn.disabled = true;
+      errorBanner.style.display = 'none';
+      try {
+        if (isSignup) {
+          const { client } = await api('/clients', {
+            method: 'POST',
+            body: { name: fd.get('name'), phone: fd.get('phone'), email: fd.get('email'), password: fd.get('password') },
+          });
+          renderCompleteProfile(client.id);
+        } else {
+          const { client } = await api('/auth/client/login', {
+            method: 'POST',
+            body: { email: fd.get('email'), password: fd.get('password') },
+          });
+          renderClientApp(client.id);
+        }
+      } catch (err) {
+        btn.disabled = false;
+        showError(err.message);
+      }
+    });
+  }
+
+  // Shared by client + realtor "forgot password" — role is 'client' or 'realtor'.
+  function renderForgotPassword(role, onBack) {
+    app.innerHTML = '';
+    app.appendChild(el(`
+      <div class="screen onboarding">
+        <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
+        <h1>Reset your<br/>password.</h1>
+        <p class="sub">Enter your email and we'll send you a reset link.</p>
+        <div class="error-banner" id="fp-msg" style="display:none;"></div>
+        <form id="fp-form" style="display:flex; flex-direction:column; gap:14px;">
+          <div class="field"><label>Email</label><input type="email" name="email" required /></div>
+          <button class="btn btn-primary" type="submit">Send reset link →</button>
+          <button class="btn btn-secondary" type="button" id="fp-back">← Back</button>
+        </form>
+      </div>
+    `));
+    document.getElementById('fp-back').addEventListener('click', onBack);
+    document.getElementById('fp-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const btn = e.target.querySelector('button[type=submit]');
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+      try {
+        await api('/auth/forgot-password', { method: 'POST', body: { email: fd.get('email'), role } });
+        const msg = document.getElementById('fp-msg');
+        msg.style.background = 'rgba(52,150,90,0.2)';
+        msg.style.borderColor = 'rgba(52,150,90,0.6)';
+        msg.textContent = "If that email is registered, we've sent a reset link — check your inbox.";
+        msg.style.display = 'block';
+        e.target.querySelector('input[name=email]').disabled = true;
+        btn.remove();
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Send reset link →';
+        const msg = document.getElementById('fp-msg');
+        msg.textContent = err.message;
+        msg.style.display = 'block';
+      }
+    });
+  }
+
+  // "Tell us what you're looking for" — collected once, right after an account is first
+  // created (password signup or first-ever Google/Apple sign-in).
+  function renderCompleteProfile(clientId) {
+    app.innerHTML = '';
+    app.appendChild(el(`
+      <div class="screen onboarding">
+        <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
+        <h1>Swipe. Match.<br/>Meet your agent.</h1>
+        <p class="sub">Tell us a bit about what you're looking for, then swipe through agents near you to find the right fit.</p>
+        <form id="profile-form" style="display:flex; flex-direction:column; gap:14px;">
           <div class="field">
             <label>State</label>
             <select name="state" required>${stateOptionsHtml()}</select>
@@ -108,40 +304,6 @@
           <div class="field">
             <label>City or zip code (optional)</label>
             <input type="text" name="city" placeholder="e.g. Austin or 78701" />
-          </div>
-          <button class="btn btn-primary" type="submit">Continue →</button>
-        </form>
-        <p class="hint">Real estate agent? <a href="/agent-signup.html" style="color:#fff;">List your profile — $49/mo</a></p>
-        <p class="hint" style="margin-top:-4px;"><a href="/privacy.html" style="color:rgba(255,255,255,0.5);">Privacy Policy</a></p>
-      </div>
-    `));
-
-    document.getElementById('location-form').addEventListener('submit', (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      renderDetailsStep({ state: fd.get('state'), city: fd.get('city') });
-    });
-  }
-
-  function renderDetailsStep(location) {
-    app.innerHTML = '';
-    app.appendChild(el(`
-      <div class="screen onboarding">
-        <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
-        <h1>Swipe. Match.<br/>Meet your agent.</h1>
-        <p class="sub">Tell us a bit about what you're looking for, then swipe through agents near you to find the right fit.</p>
-        <form id="onboard-form" style="display:flex; flex-direction:column; gap:14px;">
-          <div class="field">
-            <label>Your name</label>
-            <input type="text" name="name" placeholder="Jane Smith" required />
-          </div>
-          <div class="field">
-            <label>Phone</label>
-            <input type="tel" name="phone" placeholder="(423) 555-0100" />
-          </div>
-          <div class="field">
-            <label>Email</label>
-            <input type="email" name="email" placeholder="jane@example.com" />
           </div>
           <div class="field">
             <label>I'm looking to...</label>
@@ -153,33 +315,22 @@
             </select>
           </div>
           <button class="btn btn-primary" type="submit">Start swiping →</button>
-          <button class="btn btn-secondary" type="button" id="back-btn">← Back</button>
         </form>
       </div>
     `));
 
-    document.getElementById('back-btn').addEventListener('click', () => renderLocationStep());
-
-    document.getElementById('onboard-form').addEventListener('submit', async (e) => {
+    document.getElementById('profile-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
       const btn = e.target.querySelector('button[type=submit]');
       btn.disabled = true;
-      btn.textContent = 'Creating your profile…';
+      btn.textContent = 'Saving…';
       try {
-        const { client } = await api('/clients', {
-          method: 'POST',
-          body: {
-            name: fd.get('name'),
-            phone: fd.get('phone'),
-            email: fd.get('email'),
-            intent: fd.get('intent'),
-            area: location.city,
-            state: location.state,
-          },
+        await api('/clients/me', {
+          method: 'PATCH',
+          body: { intent: fd.get('intent'), area: fd.get('city'), state: fd.get('state') },
         });
-        localStorage.setItem(LS_KEY, client.id);
-        renderClientApp(client.id);
+        renderClientApp(clientId);
       } catch (err) {
         btn.disabled = false;
         btn.textContent = 'Start swiping →';
@@ -198,7 +349,7 @@
       loading = true;
       draw();
       try {
-        const data = await api('/realtors?client_id=' + clientId);
+        const data = await api('/realtors');
         realtors = data.realtors;
       } catch (e) {
         realtors = [];
@@ -213,7 +364,7 @@
         <div style="display:flex; flex-direction:column; min-height:100vh; min-height:100dvh; width:100%;">
           <div class="topbar">
             <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
-            <button class="btn btn-secondary" id="reset-btn" style="padding:8px 14px; font-size:12px;">Start over</button>
+            <button class="btn btn-secondary" id="logout-btn" style="padding:8px 14px; font-size:12px;">Log out</button>
           </div>
           <div id="tab-content" style="flex:1; display:flex; flex-direction:column;"></div>
           <div class="bottom-nav">
@@ -235,11 +386,9 @@
           draw();
         });
       });
-      wrap.querySelector('#reset-btn').addEventListener('click', () => {
-        if (confirm('Clear your profile and start over on this device?')) {
-          localStorage.removeItem(LS_KEY);
-          renderOnboarding();
-        }
+      wrap.querySelector('#logout-btn').addEventListener('click', async () => {
+        try { await api('/auth/logout', { method: 'POST' }); } catch (e) { /* ignore */ }
+        renderOnboarding();
       });
       return wrap;
     }
@@ -425,7 +574,7 @@
       try {
         const result = await api('/swipe', {
           method: 'POST',
-          body: { client_id: clientId, realtor_id: realtor.id, direction },
+          body: { realtor_id: realtor.id, direction },
         });
         if (result.match) {
           showMatchModal(result.realtor);
@@ -550,6 +699,7 @@
         ${subBanner}
         ${leadItems}
         <p class="hint">This is your leads inbox — everyone who swiped right on your profile shows up here.</p>
+        <button class="btn btn-secondary" id="dash-logout" style="margin-top:14px;">Log out</button>
       `;
 
       const billingBtn = content.querySelector('#manage-billing');
@@ -567,8 +717,18 @@
           }
         });
       }
-    }).catch(() => {
-      wrap.querySelector('#dash-content').innerHTML = `<div class="dash-header"><p>Realtor not found.</p></div>`;
+      content.querySelector('#dash-logout').addEventListener('click', async () => {
+        try { await api('/auth/logout', { method: 'POST' }); } catch (e) { /* ignore */ }
+        window.location.href = '/realtor-login.html';
+      });
+    }).catch((err) => {
+      const needsLogin = /log in/i.test(err.message || '');
+      wrap.querySelector('#dash-content').innerHTML = needsLogin
+        ? `<div class="dash-header">
+             <p>Please log in to view your dashboard.</p>
+             <a href="/realtor-login.html?next=${encodeURIComponent(path)}" class="btn btn-primary" style="display:inline-block; text-decoration:none; margin-top:14px;">Log in</a>
+           </div>`
+        : `<div class="dash-header"><p>Realtor not found.</p></div>`;
     });
   }
 })();

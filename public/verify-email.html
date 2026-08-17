@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>Verify your email — Agentr</title>
+<link rel="icon" href="/img/favicon.png" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="app">
+    <div class="screen onboarding">
+      <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
+      <h1 id="title">Verifying…</h1>
+      <p class="sub" id="message">One moment.</p>
+      <p class="hint"><a href="/" id="back-link" style="color:rgba(255,255,255,0.6);">← Back to Agentr</a></p>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get('token') || '';
+      const role = params.get('role') === 'realtor' ? 'realtor' : 'client';
+      document.getElementById('back-link').href = role === 'realtor' ? '/realtor-login.html' : '/';
+
+      fetch('/api/auth/verify-email?token=' + encodeURIComponent(token) + '&role=' + role)
+        .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+        .then(({ ok, data }) => {
+          if (ok) {
+            document.getElementById('title').innerHTML = 'Email<br/>verified.';
+            document.getElementById('message').textContent = "You're all set — thanks for confirming your email.";
+          } else {
+            document.getElementById('title').innerHTML = 'Link<br/>expired.';
+            document.getElementById('message').textContent = data.error || 'That verification link is invalid or has expired.';
+          }
+        })
+        .catch(() => {
+          document.getElementById('title').innerHTML = 'Something<br/>went wrong.';
+          document.getElementById('message').textContent = 'Please try again later.';
+        });
+    })();
+  </script>
+</body>
+</html>
