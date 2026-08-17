@@ -364,6 +364,16 @@ function getAllClientsAdmin() {
   return db.prepare('SELECT * FROM clients ORDER BY created_at DESC').all();
 }
 
+// Deletes a client signup — used from the admin panel to clean up test accounts or handle
+// a deletion request. Also removes their swipes/matches and any active login sessions so a
+// stale session cookie can't keep using a deleted account.
+function deleteClientAdmin(id) {
+  db.prepare('DELETE FROM swipes WHERE client_id = ?').run(id);
+  db.prepare("DELETE FROM sessions WHERE subject_type = 'client' AND subject_id = ?").run(id);
+  const info = db.prepare('DELETE FROM clients WHERE id = ?').run(id);
+  return info.changes > 0;
+}
+
 // Headline counts for the admin dashboard. Kept as simple COUNT(*) queries (SQLite handles
 // these instantly even at real-world scale for this app) rather than caching, since the admin
 // panel is low-traffic and always wants a fresh number.
@@ -624,6 +634,7 @@ module.exports = {
   setRealtorPhoto,
   setRealtorVideo,
   getAllClientsAdmin,
+  deleteClientAdmin,
   getAdminStats,
   // sessions
   createSession,

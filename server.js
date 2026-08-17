@@ -19,6 +19,7 @@ const {
   setRealtorPhoto,
   setRealtorVideo,
   getAllClientsAdmin,
+  deleteClientAdmin,
   getAdminStats,
   createSession,
   getSession,
@@ -56,7 +57,7 @@ const {
   verifyGoogleIdToken,
   verifyAppleIdToken,
 } = require('./auth');
-const { sendVerificationEmail, sendPasswordResetEmail } = require('./email');
+const { sendVerificationEmail, sendPasswordResetEmail, sendNewLeadEmail } = require('./email');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -571,6 +572,10 @@ async function handleApi(req, res, url) {
     if (!client) return sendJson(res, 404, { error: 'client not found' });
     if (!realtor) return sendJson(res, 404, { error: 'realtor not found' });
 
+    // Look up any prior swipe before overwriting it, so we only email the agent on a *new*
+    // like — not every time a client re-swipes (e.g. pass -> like -> like again).
+    const priorSwipe = db.prepare('SELECT direction FROM swipes WHERE client_id = ? AND realtor_id = ?').get(clientId, realtorId);
+
     try {
       db.prepare(`
         INSERT INTO swipes (client_id, realtor_id, direction) VALUES (?, ?, ?)
@@ -582,6 +587,22 @@ async function handleApi(req, res, url) {
 
     // Instant-match model: a right swipe (like) immediately creates a match/lead.
     const isMatch = direction === 'like';
+    const isNewMatch = isMatch && (!priorSwipe || priorSwipe.direction !== 'like');
+    if (isNewMatch && realtor.email) {
+      const origin = `https://${req.headers.host}`;
+      // Fire-and-forget — sendNewLeadEmail is best-effort (logs, never throws) so a slow or
+      // down email provider never delays the swipe response the client is waiting on.
+      sendNewLeadEmail(realtor.email, {
+        name: client.name,
+        intent: client.intent,
+        areaInterest: client.area_interest,
+        state: client.state,
+        timeline: client.timeline,
+        budgetRange: client.budget_range,
+        propertyType: client.property_type,
+        dashboardUrl: `${origin}/realtor/${realtor.id}`,
+      });
+    }
     return sendJson(res, 200, {
       match: isMatch,
       realtor: isMatch ? realtorToContact(realtor) : realtorToPublic(realtor),
@@ -920,6 +941,14 @@ async function handleApi(req, res, url) {
         createdAt: c.created_at,
       }));
       return sendJson(res, 200, { clients });
+    }
+
+    // DELETE /api/admin/clients/:id  -> remove a client signup (e.g. cleaning up test accounts),
+    // along with their swipes/matches and any active login session.
+    if (req.method === 'DELETE' && parts[2] === 'clients' && parts.length === 4) {
+      const ok = deleteClientAdmin(Number(parts[3]));
+      if (!ok) return sendJson(res, 404, { error: 'client not found' });
+      return sendJson(res, 200, { ok: true });
     }
 
     return sendJson(res, 404, { error: 'not found' });

@@ -81,4 +81,36 @@ function sendPasswordResetEmail(to, resetUrl) {
   }).catch((e) => console.error('sendPasswordResetEmail failed:', e.message));
 }
 
-module.exports = { sendEmail, sendVerificationEmail, sendPasswordResetEmail };
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+const INTENT_LABELS = { buy: 'Buy', sell: 'Sell', invest: 'Invest / STR', rent: 'Rent' };
+
+// Fired when a client swipes right on a realtor — lets the agent know without having to
+// keep the dashboard open. Best-effort like the other senders: a failure here should never
+// break the swipe/match flow itself, so callers should not await this on the response path.
+function sendNewLeadEmail(to, lead) {
+  const details = [
+    lead.intent ? `Looking to: <strong>${esc(INTENT_LABELS[lead.intent] || lead.intent)}</strong>` : null,
+    lead.areaInterest || lead.state ? `Area: <strong>${esc([lead.areaInterest, lead.state].filter(Boolean).join(', '))}</strong>` : null,
+    lead.budgetRange ? `Budget: <strong>${esc(lead.budgetRange)}</strong>` : null,
+    lead.timeline ? `Timeline: <strong>${esc(lead.timeline)}</strong>` : null,
+    lead.propertyType ? `Property type: <strong>${esc(lead.propertyType)}</strong>` : null,
+  ].filter(Boolean).map((line) => `<p style="margin:4px 0;">${line}</p>`).join('');
+
+  return sendEmail({
+    to,
+    subject: `New match: ${lead.name || 'A client'} on Agentr`,
+    html: wrapHtml(`
+      <p><strong>${esc(lead.name) || 'A client'}</strong> just matched with you on Agentr.</p>
+      ${details}
+      <p><a href="${lead.dashboardUrl}" style="display:inline-block; background:#e9c21c; color:#15110a; font-weight:bold; padding:12px 20px; border-radius:10px; text-decoration:none; margin-top:8px;">View lead</a></p>
+      <p style="font-size:13px; color:#666;">Reach out soon — clients matched with more than one agent tend to go with whoever responds first.</p>
+    `),
+  }).catch((e) => console.error('sendNewLeadEmail failed:', e.message));
+}
+
+module.exports = { sendEmail, sendVerificationEmail, sendPasswordResetEmail, sendNewLeadEmail };
