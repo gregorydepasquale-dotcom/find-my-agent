@@ -50,6 +50,16 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now')),
     UNIQUE(client_id, realtor_id)
   );
+
+  -- Login sessions for both clients and realtors, keyed by an opaque random token stored
+  -- in an httpOnly cookie. subject_type + subject_id point at the clients or realtors row.
+  CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    subject_type TEXT NOT NULL CHECK (subject_type IN ('client', 'realtor')),
+    subject_id INTEGER NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    expires_at TEXT NOT NULL
+  );
 `);
 
 function columnExists(table, column) {
@@ -89,6 +99,29 @@ function migrate() {
   if (!columnExists('clients', 'state')) {
     db.exec(`ALTER TABLE clients ADD COLUMN state TEXT`);
     console.log('Migrated: added clients.state');
+  }
+
+  // Real accounts (password + Google/Apple sign-in) for both clients and realtors. Existing
+  // rows just get NULL/0 in these columns — they're "unclaimed" guest records until someone
+  // signs up with that email, at which point the signup flow adopts the existing row instead
+  // of creating a duplicate (see createClientAccount / upsertPendingRealtor).
+  const accountColumns = [
+    ['password_hash', 'TEXT'],
+    ['google_id', 'TEXT'],
+    ['apple_id', 'TEXT'],
+    ['email_verified', 'INTEGER DEFAULT 0'],
+    ['verify_token', 'TEXT'],
+    ['verify_token_expires', 'TEXT'],
+    ['reset_token', 'TEXT'],
+    ['reset_token_expires', 'TEXT'],
+  ];
+  for (const table of ['clients', 'realtors']) {
+    for (const [col, def] of accountColumns) {
+      if (!columnExists(table, col)) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+        console.log(`Migrated: added ${table}.${col}`);
+      }
+    }
   }
 }
 
@@ -202,19 +235,35 @@ function getRealtorByStripeSubscriptionId(subscriptionId) {
   return db.prepare('SELECT * FROM realtors WHERE stripe_subscription_id = ?').get(subscriptionId);
 }
 
+// A realtor row counts as "claimed" once it has real login credentials — before that,
+// re-submitting the signup form with the same email just edits the in-progress draft
+// (e.g. retrying after an abandoned Stripe checkout). Once claimed, only that account's
+// owner (via login) should be able to change it — see the 409 check in server.js.
+function isRealtorClaimed(row) {
+  return Boolean(row.password_hash || row.google_id || row.apple_id);
+}
+
 // Create (or reuse, if a prior signup attempt never completed checkout) a pending realtor row.
+// fields may include passwordHash, googleId, appleId, emailVerified (account credentials) —
+// at least one signup method is expected to be set by the caller.
 function upsertPendingRealtor(fields) {
   const existing = getRealtorByEmail(fields.email);
   if (existing && existing.subscription_status !== 'active') {
     db.prepare(`
       UPDATE realtors SET
         name = ?, brokerage = ?, photo_emoji = ?, bio = ?, specialties = ?, areas = ?,
-        years_experience = ?, phone = ?, email = ?, state = ?
+        years_experience = ?, phone = ?, email = ?, state = ?,
+        password_hash = COALESCE(?, password_hash),
+        google_id = COALESCE(?, google_id),
+        apple_id = COALESCE(?, apple_id),
+        email_verified = CASE WHEN ? = 1 THEN 1 ELSE email_verified END
       WHERE id = ?
     `).run(
       fields.name, fields.brokerage || null, fields.photoEmoji || '🏠', fields.bio || null,
       fields.specialties || null, fields.areas || null, fields.yearsExperience || null,
-      fields.phone || null, fields.email, fields.state || null, existing.id
+      fields.phone || null, fields.email, fields.state || null,
+      fields.passwordHash || null, fields.googleId || null, fields.appleId || null,
+      fields.emailVerified ? 1 : 0, existing.id
     );
     return db.prepare('SELECT * FROM realtors WHERE id = ?').get(existing.id);
   }
@@ -223,12 +272,14 @@ function upsertPendingRealtor(fields) {
   }
   const info = db.prepare(`
     INSERT INTO realtors
-      (name, brokerage, photo_emoji, bio, specialties, areas, years_experience, closed_sales, rating, phone, email, subscription_status, state)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, 'inactive', ?)
+      (name, brokerage, photo_emoji, bio, specialties, areas, years_experience, closed_sales, rating, phone, email, subscription_status, state,
+       password_hash, google_id, apple_id, email_verified)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, 'inactive', ?, ?, ?, ?, ?)
   `).run(
     fields.name, fields.brokerage || null, fields.photoEmoji || '🏠', fields.bio || null,
     fields.specialties || null, fields.areas || null, fields.yearsExperience || null,
-    fields.phone || null, fields.email, fields.state || null
+    fields.phone || null, fields.email, fields.state || null,
+    fields.passwordHash || null, fields.googleId || null, fields.appleId || null, fields.emailVerified ? 1 : 0
   );
   return db.prepare('SELECT * FROM realtors WHERE id = ?').get(info.lastInsertRowid);
 }
@@ -313,12 +364,217 @@ function setRealtorVideo(id, videoUrl) {
   return db.prepare('SELECT * FROM realtors WHERE id = ?').get(id);
 }
 
+// ---------------- Sessions (both clients and realtors) ----------------
+
+function createSession(subjectType, subjectId, token, ttlDays = 30) {
+  // Opportunistic cleanup of expired rows — cheap at this scale, keeps the table from
+  // growing forever without needing a separate cron job.
+  db.prepare(`DELETE FROM sessions WHERE expires_at <= datetime('now')`).run();
+  db.prepare(`
+    INSERT INTO sessions (token, subject_type, subject_id, expires_at)
+    VALUES (?, ?, ?, datetime('now', '+' || ? || ' days'))
+  `).run(token, subjectType, subjectId, ttlDays);
+}
+
+function getSession(token) {
+  if (!token) return null;
+  return db.prepare(`SELECT * FROM sessions WHERE token = ? AND expires_at > datetime('now')`).get(token) || null;
+}
+
+function deleteSession(token) {
+  db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+}
+
+function deleteAllSessionsForSubject(subjectType, subjectId) {
+  db.prepare('DELETE FROM sessions WHERE subject_type = ? AND subject_id = ?').run(subjectType, subjectId);
+}
+
+// ---------------- Client account helpers ----------------
+
+function getClientById(id) {
+  return db.prepare('SELECT * FROM clients WHERE id = ?').get(id) || null;
+}
+
+function getClientByEmail(email) {
+  if (!email) return null;
+  return db.prepare('SELECT * FROM clients WHERE lower(email) = lower(?)').get(email) || null;
+}
+
+function getClientByGoogleId(id) {
+  if (!id) return null;
+  return db.prepare('SELECT * FROM clients WHERE google_id = ?').get(id) || null;
+}
+
+function getClientByAppleId(id) {
+  if (!id) return null;
+  return db.prepare('SELECT * FROM clients WHERE apple_id = ?').get(id) || null;
+}
+
+// A client row counts as "claimed" once it has real login credentials. Rows created before
+// accounts existed (or an incomplete guest record) have none of these set, so a fresh signup
+// with the same email adopts that row (keeping any swipe/match history) instead of erroring.
+function isClientClaimed(row) {
+  return Boolean(row.password_hash || row.google_id || row.apple_id);
+}
+
+// Password signup. Returns { client, claimed } — claimed=true means an existing unclaimed
+// guest row was adopted rather than a brand-new row being created.
+function createClientAccount(fields) {
+  const existing = getClientByEmail(fields.email);
+  if (existing) {
+    db.prepare(`
+      UPDATE clients SET
+        name = ?, phone = COALESCE(?, phone), intent = COALESCE(?, intent),
+        area_interest = COALESCE(?, area_interest), state = COALESCE(?, state),
+        password_hash = ?, verify_token = ?, verify_token_expires = ?
+      WHERE id = ?
+    `).run(
+      fields.name, fields.phone || null, fields.intent || null, fields.area || null,
+      fields.state || null, fields.passwordHash, fields.verifyToken || null,
+      fields.verifyTokenExpires || null, existing.id
+    );
+    return { client: getClientById(existing.id), claimed: true };
+  }
+  const info = db.prepare(`
+    INSERT INTO clients (name, phone, email, intent, area_interest, state, password_hash, verify_token, verify_token_expires)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    fields.name, fields.phone || null, fields.email, fields.intent || null, fields.area || null,
+    fields.state || null, fields.passwordHash, fields.verifyToken || null, fields.verifyTokenExpires || null
+  );
+  return { client: getClientById(info.lastInsertRowid), claimed: false };
+}
+
+// Google/Apple sign-in for clients: find by provider id, else link an existing row by email
+// (claiming it, same as password signup), else create a fresh minimal account. Returns
+// { client, isNew } — isNew=true means this is their very first sign-in (used to route them
+// through the "tell us what you're looking for" step instead of straight into the app).
+function createOrLinkClientOAuth({ provider, sub, email, name }) {
+  const getByProvider = provider === 'google' ? getClientByGoogleId : getClientByAppleId;
+  const providerColumn = provider === 'google' ? 'google_id' : 'apple_id';
+
+  const byProvider = getByProvider(sub);
+  if (byProvider) return { client: byProvider, isNew: false };
+
+  const byEmail = email ? getClientByEmail(email) : null;
+  if (byEmail) {
+    db.prepare(`UPDATE clients SET ${providerColumn} = ?, email_verified = 1 WHERE id = ?`).run(sub, byEmail.id);
+    return { client: getClientById(byEmail.id), isNew: false };
+  }
+
+  const info = db.prepare(`
+    INSERT INTO clients (name, email, ${providerColumn}, email_verified)
+    VALUES (?, ?, ?, 1)
+  `).run(name || 'New Client', email || null, sub);
+  return { client: getClientById(info.lastInsertRowid), isNew: true };
+}
+
+function updateClientProfile(id, fields) {
+  const current = getClientById(id);
+  if (!current) return null;
+  db.prepare(`
+    UPDATE clients SET
+      name = COALESCE(?, name), phone = COALESCE(?, phone), intent = COALESCE(?, intent),
+      area_interest = COALESCE(?, area_interest), state = COALESCE(?, state)
+    WHERE id = ?
+  `).run(fields.name || null, fields.phone || null, fields.intent || null, fields.area || null, fields.state || null, id);
+  return getClientById(id);
+}
+
+function setClientPasswordHash(id, hash) {
+  db.prepare('UPDATE clients SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL WHERE id = ?').run(hash, id);
+}
+
+function setClientResetToken(id, token, expiresAt) {
+  db.prepare('UPDATE clients SET reset_token = ?, reset_token_expires = ? WHERE id = ?').run(token, expiresAt, id);
+}
+
+function getClientByResetToken(token) {
+  if (!token) return null;
+  return db.prepare(`SELECT * FROM clients WHERE reset_token = ? AND reset_token_expires > datetime('now')`).get(token) || null;
+}
+
+function getClientByVerifyToken(token) {
+  if (!token) return null;
+  return db.prepare(`SELECT * FROM clients WHERE verify_token = ? AND verify_token_expires > datetime('now')`).get(token) || null;
+}
+
+function markClientEmailVerified(id) {
+  db.prepare('UPDATE clients SET email_verified = 1, verify_token = NULL, verify_token_expires = NULL WHERE id = ?').run(id);
+}
+
+// ---------------- Realtor account helpers ----------------
+
+function getRealtorById(id) {
+  return db.prepare('SELECT * FROM realtors WHERE id = ?').get(id) || null;
+}
+
+function getRealtorByGoogleId(id) {
+  if (!id) return null;
+  return db.prepare('SELECT * FROM realtors WHERE google_id = ?').get(id) || null;
+}
+
+function getRealtorByAppleId(id) {
+  if (!id) return null;
+  return db.prepare('SELECT * FROM realtors WHERE apple_id = ?').get(id) || null;
+}
+
+// Login-only lookup for returning realtors signing in via Google/Apple (does NOT create an
+// account — realtor profiles need brokerage/bio/specialties that only the signup form
+// collects). Links the provider id to a matching email if that email exists but was
+// registered a different way. Returns the realtor row, or null if no match.
+function findRealtorForOAuthLogin(provider, sub, email) {
+  const getByProvider = provider === 'google' ? getRealtorByGoogleId : getRealtorByAppleId;
+  const providerColumn = provider === 'google' ? 'google_id' : 'apple_id';
+
+  const byProvider = getByProvider(sub);
+  if (byProvider) return byProvider;
+
+  const byEmail = email ? getRealtorByEmail(email) : null;
+  if (byEmail) {
+    db.prepare(`UPDATE realtors SET ${providerColumn} = ?, email_verified = 1 WHERE id = ?`).run(sub, byEmail.id);
+    return getRealtorById(byEmail.id);
+  }
+  return null;
+}
+
+function setRealtorPasswordHash(id, hash) {
+  db.prepare('UPDATE realtors SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL WHERE id = ?').run(hash, id);
+}
+
+function setRealtorResetToken(id, token, expiresAt) {
+  db.prepare('UPDATE realtors SET reset_token = ?, reset_token_expires = ? WHERE id = ?').run(token, expiresAt, id);
+}
+
+function getRealtorByResetToken(token) {
+  if (!token) return null;
+  return db.prepare(`SELECT * FROM realtors WHERE reset_token = ? AND reset_token_expires > datetime('now')`).get(token) || null;
+}
+
+function getRealtorByVerifyToken(token) {
+  if (!token) return null;
+  return db.prepare(`SELECT * FROM realtors WHERE verify_token = ? AND verify_token_expires > datetime('now')`).get(token) || null;
+}
+
+function markRealtorEmailVerified(id) {
+  db.prepare('UPDATE realtors SET email_verified = 1, verify_token = NULL, verify_token_expires = NULL WHERE id = ?').run(id);
+}
+
+function setRealtorVerifyToken(id, token, expiresAt) {
+  db.prepare('UPDATE realtors SET verify_token = ?, verify_token_expires = ? WHERE id = ?').run(token, expiresAt, id);
+}
+
+function setClientVerifyToken(id, token, expiresAt) {
+  db.prepare('UPDATE clients SET verify_token = ?, verify_token_expires = ? WHERE id = ?').run(token, expiresAt, id);
+}
+
 module.exports = {
   db,
   getRealtorByEmail,
   getRealtorByStripeCustomerId,
   getRealtorByStripeSubscriptionId,
   upsertPendingRealtor,
+  isRealtorClaimed,
   updateRealtorSubscription,
   getAllRealtorsAdmin,
   createRealtorAdmin,
@@ -327,4 +583,35 @@ module.exports = {
   setRealtorPhoto,
   setRealtorVideo,
   getAllClientsAdmin,
+  // sessions
+  createSession,
+  getSession,
+  deleteSession,
+  deleteAllSessionsForSubject,
+  // client accounts
+  getClientById,
+  getClientByEmail,
+  getClientByGoogleId,
+  getClientByAppleId,
+  isClientClaimed,
+  createClientAccount,
+  createOrLinkClientOAuth,
+  updateClientProfile,
+  setClientPasswordHash,
+  setClientResetToken,
+  getClientByResetToken,
+  getClientByVerifyToken,
+  markClientEmailVerified,
+  setClientVerifyToken,
+  // realtor accounts
+  getRealtorById,
+  getRealtorByGoogleId,
+  getRealtorByAppleId,
+  findRealtorForOAuthLogin,
+  setRealtorPasswordHash,
+  setRealtorResetToken,
+  getRealtorByResetToken,
+  getRealtorByVerifyToken,
+  markRealtorEmailVerified,
+  setRealtorVerifyToken,
 };

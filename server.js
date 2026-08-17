@@ -10,6 +10,7 @@ const {
   getRealtorByStripeCustomerId,
   getRealtorByStripeSubscriptionId,
   upsertPendingRealtor,
+  isRealtorClaimed,
   updateRealtorSubscription,
   getAllRealtorsAdmin,
   createRealtorAdmin,
@@ -18,8 +19,43 @@ const {
   setRealtorPhoto,
   setRealtorVideo,
   getAllClientsAdmin,
+  createSession,
+  getSession,
+  deleteSession,
+  deleteAllSessionsForSubject,
+  getClientById,
+  getClientByEmail,
+  isClientClaimed,
+  createClientAccount,
+  createOrLinkClientOAuth,
+  updateClientProfile,
+  setClientPasswordHash,
+  setClientResetToken,
+  getClientByResetToken,
+  getClientByVerifyToken,
+  markClientEmailVerified,
+  setClientVerifyToken,
+  getRealtorById,
+  findRealtorForOAuthLogin,
+  setRealtorPasswordHash,
+  setRealtorResetToken,
+  getRealtorByResetToken,
+  getRealtorByVerifyToken,
+  markRealtorEmailVerified,
+  setRealtorVerifyToken,
 } = require('./db');
 const stripe = require('./stripe');
+const {
+  hashPassword,
+  verifyPassword,
+  setSessionCookie,
+  clearSessionCookie,
+  getSessionToken,
+  randomToken,
+  verifyGoogleIdToken,
+  verifyAppleIdToken,
+} = require('./auth');
+const { sendVerificationEmail, sendPasswordResetEmail } = require('./email');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -30,6 +66,11 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || '';
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const APPLE_SERVICES_ID = process.env.APPLE_SERVICES_ID || '';
+const APPLE_REDIRECT_URI = process.env.APPLE_REDIRECT_URI || '';
+const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+const VERIFY_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const PHOTO_MIME_EXT = {
   'image/png': '.png',
   'image/jpeg': '.jpg',
@@ -50,6 +91,31 @@ function checkAdminAuth(req) {
   const expected = Buffer.from(ADMIN_PASSWORD);
   if (supplied.length !== expected.length) return false;
   return crypto.timingSafeEqual(supplied, expected);
+}
+
+function sqliteFutureTimestamp(ms) {
+  // Matches SQLite's own datetime('now') format (UTC, 'YYYY-MM-DD HH:MM:SS') so token
+  // expiry columns compare correctly against it as plain text.
+  return new Date(Date.now() + ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function getCurrentSession(req) {
+  const token = getSessionToken(req);
+  if (!token) return null;
+  return getSession(token);
+}
+
+function clientToPublic(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    phone: row.phone,
+    email: row.email,
+    intent: row.intent,
+    areaInterest: row.area_interest,
+    state: row.state,
+    emailVerified: Boolean(row.email_verified),
+  };
 }
 
 const MIME = {
@@ -199,35 +265,234 @@ function adminFieldsFromBody(body) {
 async function handleApi(req, res, url) {
   const parts = url.pathname.split('/').filter(Boolean); // ['api', ...]
 
-  // POST /api/clients  { name, phone, email, intent, area, state }
+  // ---------------- /api/auth/* ----------------
+  if (parts[1] === 'auth') {
+    // GET /api/auth/config -> tells the frontend which OAuth buttons to show. Both are null
+    // (buttons hidden) until GOOGLE_CLIENT_ID / APPLE_SERVICES_ID are set in the environment.
+    if (req.method === 'GET' && parts[2] === 'config' && parts.length === 3) {
+      return sendJson(res, 200, {
+        googleClientId: GOOGLE_CLIENT_ID || null,
+        appleServicesId: APPLE_SERVICES_ID || null,
+        appleRedirectUri: APPLE_REDIRECT_URI || null,
+      });
+    }
+
+    // GET /api/auth/me -> whoever the session cookie currently identifies, client or realtor.
+    if (req.method === 'GET' && parts[2] === 'me' && parts.length === 3) {
+      const session = getCurrentSession(req);
+      if (!session) return sendJson(res, 401, { error: 'Not signed in.' });
+      if (session.subject_type === 'client') {
+        const client = getClientById(session.subject_id);
+        if (!client) { deleteSession(session.token); clearSessionCookie(req, res); return sendJson(res, 401, { error: 'Not signed in.' }); }
+        return sendJson(res, 200, { role: 'client', client: clientToPublic(client) });
+      }
+      const realtor = getRealtorById(session.subject_id);
+      if (!realtor) { deleteSession(session.token); clearSessionCookie(req, res); return sendJson(res, 401, { error: 'Not signed in.' }); }
+      return sendJson(res, 200, { role: 'realtor', realtor: realtorToOwner(realtor) });
+    }
+
+    // POST /api/auth/logout
+    if (req.method === 'POST' && parts[2] === 'logout' && parts.length === 3) {
+      const token = getSessionToken(req);
+      if (token) deleteSession(token);
+      clearSessionCookie(req, res);
+      return sendJson(res, 200, { ok: true });
+    }
+
+    // POST /api/auth/client/login  { email, password }
+    if (req.method === 'POST' && parts[2] === 'client' && parts[3] === 'login' && parts.length === 4) {
+      const body = await readBody(req);
+      const client = getClientByEmail((body.email || '').trim());
+      if (!client || !verifyPassword(String(body.password || ''), client.password_hash)) {
+        return sendJson(res, 401, { error: 'Incorrect email or password.' });
+      }
+      const token = randomToken();
+      createSession('client', client.id, token);
+      setSessionCookie(req, res, token);
+      return sendJson(res, 200, { client: clientToPublic(client) });
+    }
+
+    // POST /api/auth/client/oauth  { provider: 'google'|'apple', idToken, name? }
+    // Signs a client in, creating (and auto-linking-by-email) their account on first use —
+    // clients don't need a rich profile up front, so unlike realtors this can be fully
+    // automatic. `isNew` tells the frontend whether to show the "what are you looking for?"
+    // follow-up step.
+    if (req.method === 'POST' && parts[2] === 'client' && parts[3] === 'oauth' && parts.length === 4) {
+      const body = await readBody(req);
+      const provider = body.provider === 'apple' ? 'apple' : 'google';
+      if (provider === 'google' && !GOOGLE_CLIENT_ID) return sendJson(res, 503, { error: 'Google sign-in is not configured yet.' });
+      if (provider === 'apple' && !APPLE_SERVICES_ID) return sendJson(res, 503, { error: 'Apple sign-in is not configured yet.' });
+      let payload;
+      try {
+        payload = provider === 'google'
+          ? await verifyGoogleIdToken(body.idToken, GOOGLE_CLIENT_ID)
+          : await verifyAppleIdToken(body.idToken, APPLE_SERVICES_ID);
+      } catch (e) {
+        return sendJson(res, 401, { error: 'Could not verify sign-in: ' + e.message });
+      }
+      const { client, isNew } = createOrLinkClientOAuth({
+        provider, sub: payload.sub, email: payload.email, name: (body.name || '').trim() || null,
+      });
+      const token = randomToken();
+      createSession('client', client.id, token);
+      setSessionCookie(req, res, token);
+      return sendJson(res, 200, { client: clientToPublic(client), isNew });
+    }
+
+    // POST /api/auth/realtor/login  { email, password }
+    if (req.method === 'POST' && parts[2] === 'realtor' && parts[3] === 'login' && parts.length === 4) {
+      const body = await readBody(req);
+      const realtor = getRealtorByEmail((body.email || '').trim());
+      if (!realtor || !realtor.password_hash) {
+        return sendJson(res, 401, { error: 'Incorrect email or password, or this account has no password set yet — use "Forgot password" to set one.' });
+      }
+      if (!verifyPassword(String(body.password || ''), realtor.password_hash)) {
+        return sendJson(res, 401, { error: 'Incorrect email or password.' });
+      }
+      const token = randomToken();
+      createSession('realtor', realtor.id, token);
+      setSessionCookie(req, res, token);
+      return sendJson(res, 200, { realtor: realtorToOwner(realtor) });
+    }
+
+    // POST /api/auth/realtor/oauth-login  { provider, idToken }
+    // Login only — does NOT create a new realtor account, since a real profile needs
+    // brokerage/bio/specialties that only the full signup form on agent-signup.html collects.
+    if (req.method === 'POST' && parts[2] === 'realtor' && parts[3] === 'oauth-login' && parts.length === 4) {
+      const body = await readBody(req);
+      const provider = body.provider === 'apple' ? 'apple' : 'google';
+      if (provider === 'google' && !GOOGLE_CLIENT_ID) return sendJson(res, 503, { error: 'Google sign-in is not configured yet.' });
+      if (provider === 'apple' && !APPLE_SERVICES_ID) return sendJson(res, 503, { error: 'Apple sign-in is not configured yet.' });
+      let payload;
+      try {
+        payload = provider === 'google'
+          ? await verifyGoogleIdToken(body.idToken, GOOGLE_CLIENT_ID)
+          : await verifyAppleIdToken(body.idToken, APPLE_SERVICES_ID);
+      } catch (e) {
+        return sendJson(res, 401, { error: 'Could not verify sign-in: ' + e.message });
+      }
+      const realtor = findRealtorForOAuthLogin(provider, payload.sub, payload.email);
+      if (!realtor) return sendJson(res, 404, { error: 'No Agentr account found for that sign-in. List your profile first.' });
+      const token = randomToken();
+      createSession('realtor', realtor.id, token);
+      setSessionCookie(req, res, token);
+      return sendJson(res, 200, { realtor: realtorToOwner(realtor) });
+    }
+
+    // POST /api/auth/forgot-password  { email, role }
+    // Always responds 200 regardless of whether the email matches an account, so this can't
+    // be used to probe which emails are registered.
+    if (req.method === 'POST' && parts[2] === 'forgot-password' && parts.length === 3) {
+      const body = await readBody(req);
+      const email = (body.email || '').trim();
+      const role = body.role === 'realtor' ? 'realtor' : 'client';
+      const account = role === 'client' ? getClientByEmail(email) : getRealtorByEmail(email);
+      if (account && account.email) {
+        const token = randomToken();
+        const expires = sqliteFutureTimestamp(RESET_TOKEN_TTL_MS);
+        if (role === 'client') setClientResetToken(account.id, token, expires);
+        else setRealtorResetToken(account.id, token, expires);
+        const origin = `https://${req.headers.host}`;
+        sendPasswordResetEmail(account.email, `${origin}/reset-password.html?token=${token}&role=${role}`);
+      }
+      return sendJson(res, 200, { ok: true });
+    }
+
+    // POST /api/auth/reset-password  { token, role, password }
+    if (req.method === 'POST' && parts[2] === 'reset-password' && parts.length === 3) {
+      const body = await readBody(req);
+      const role = body.role === 'realtor' ? 'realtor' : 'client';
+      const password = String(body.password || '');
+      if (password.length < 8) return sendJson(res, 400, { error: 'Password must be at least 8 characters.' });
+      const account = role === 'client' ? getClientByResetToken(body.token) : getRealtorByResetToken(body.token);
+      if (!account) return sendJson(res, 400, { error: 'That reset link is invalid or has expired. Request a new one.' });
+      const hash = hashPassword(password);
+      if (role === 'client') setClientPasswordHash(account.id, hash);
+      else setRealtorPasswordHash(account.id, hash);
+      // Log out everywhere else — whoever is resetting the password shouldn't leave old
+      // sessions (e.g. on a lost device) valid.
+      deleteAllSessionsForSubject(role, account.id);
+      return sendJson(res, 200, { ok: true });
+    }
+
+    // GET /api/auth/verify-email?token=...&role=client|realtor
+    if (req.method === 'GET' && parts[2] === 'verify-email' && parts.length === 3) {
+      const token = url.searchParams.get('token');
+      const role = url.searchParams.get('role') === 'realtor' ? 'realtor' : 'client';
+      const account = role === 'client' ? getClientByVerifyToken(token) : getRealtorByVerifyToken(token);
+      if (!account) return sendJson(res, 400, { error: 'That verification link is invalid or has expired.' });
+      if (role === 'client') markClientEmailVerified(account.id);
+      else markRealtorEmailVerified(account.id);
+      return sendJson(res, 200, { ok: true });
+    }
+
+    return sendJson(res, 404, { error: 'not found' });
+  }
+
+  // PATCH /api/clients/me  { name, phone, intent, area, state }  -> session-authenticated;
+  // used to fill in the rest of a client's profile right after Google/Apple sign-in, or to
+  // edit it later.
+  if (req.method === 'PATCH' && parts[1] === 'clients' && parts[2] === 'me' && parts.length === 3) {
+    const session = getCurrentSession(req);
+    if (!session || session.subject_type !== 'client') return sendJson(res, 401, { error: 'Please log in.' });
+    const body = await readBody(req);
+    const client = updateClientProfile(session.subject_id, {
+      name: (body.name || '').trim() || null,
+      phone: (body.phone || '').trim() || null,
+      intent: (body.intent || '').trim() || null,
+      area: (body.area || '').trim() || null,
+      state: (body.state || '').trim().toUpperCase().slice(0, 2) || null,
+    });
+    return sendJson(res, 200, { client: clientToPublic(client) });
+  }
+
+  // POST /api/clients  { name, phone, email, password, intent, area, state }
   if (req.method === 'POST' && parts[1] === 'clients' && parts.length === 2) {
     const body = await readBody(req);
     const name = (body.name || '').trim();
+    const email = (body.email || '').trim();
+    const password = String(body.password || '');
     if (!name) return sendJson(res, 400, { error: 'name is required' });
-    const stmt = db.prepare(`
-      INSERT INTO clients (name, phone, email, intent, area_interest, state)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    const info = stmt.run(
+    if (!email) return sendJson(res, 400, { error: 'email is required' });
+    if (password.length < 8) return sendJson(res, 400, { error: 'Password must be at least 8 characters.' });
+
+    const existing = getClientByEmail(email);
+    if (existing && isClientClaimed(existing)) {
+      return sendJson(res, 409, { error: 'An account with this email already exists. Please log in instead.' });
+    }
+
+    const verifyToken = randomToken();
+    const { client } = createClientAccount({
       name,
-      (body.phone || '').trim() || null,
-      (body.email || '').trim() || null,
-      (body.intent || '').trim() || null,
-      (body.area || '').trim() || null,
-      (body.state || '').trim().toUpperCase().slice(0, 2) || null
-    );
-    const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(info.lastInsertRowid);
-    return sendJson(res, 201, { client });
+      phone: (body.phone || '').trim() || null,
+      email,
+      intent: (body.intent || '').trim() || null,
+      area: (body.area || '').trim() || null,
+      state: (body.state || '').trim().toUpperCase().slice(0, 2) || null,
+      passwordHash: hashPassword(password),
+      verifyToken,
+      verifyTokenExpires: sqliteFutureTimestamp(VERIFY_TOKEN_TTL_MS),
+    });
+
+    const origin = `https://${req.headers.host}`;
+    sendVerificationEmail(client.email, `${origin}/verify-email.html?token=${verifyToken}&role=client`);
+
+    const sessionToken = randomToken();
+    createSession('client', client.id, sessionToken);
+    setSessionCookie(req, res, sessionToken);
+    return sendJson(res, 201, { client: clientToPublic(client) });
   }
 
-  // GET /api/realtors?client_id=X  -> active, paid realtors not yet swiped by this client,
-  // scoped to the client's state. A realtor with no state set is treated as visible
-  // everywhere (see the migration note in db.js) so profiles never silently disappear.
+  // GET /api/realtors  -> active, paid realtors not yet swiped by the signed-in client,
+  // scoped to their state. A realtor with no state set is treated as visible everywhere
+  // (see the migration note in db.js) so profiles never silently disappear. Requires login —
+  // client_id is taken from the session now, never from the query string.
   if (req.method === 'GET' && parts[1] === 'realtors' && parts.length === 2) {
-    const clientId = Number(url.searchParams.get('client_id'));
+    const session = getCurrentSession(req);
+    const clientId = session && session.subject_type === 'client' ? session.subject_id : null;
     let rows;
     if (clientId) {
-      const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(clientId);
+      const client = getClientById(clientId);
       const clientState = client && client.state;
       rows = db.prepare(`
         SELECT * FROM realtors
@@ -242,16 +507,19 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { realtors: rows.map(realtorToPublic) });
   }
 
-  // POST /api/swipe  { client_id, realtor_id, direction }
+  // POST /api/swipe  { realtor_id, direction }  -> client_id comes from the session, never
+  // the request body, so one client can't record swipes (or read match state) as another.
   if (req.method === 'POST' && parts[1] === 'swipe' && parts.length === 2) {
+    const session = getCurrentSession(req);
+    if (!session || session.subject_type !== 'client') return sendJson(res, 401, { error: 'Please log in to swipe.' });
+    const clientId = session.subject_id;
     const body = await readBody(req);
-    const clientId = Number(body.client_id);
     const realtorId = Number(body.realtor_id);
     const direction = body.direction;
-    if (!clientId || !realtorId || !['like', 'pass'].includes(direction)) {
-      return sendJson(res, 400, { error: 'client_id, realtor_id, and direction (like|pass) are required' });
+    if (!realtorId || !['like', 'pass'].includes(direction)) {
+      return sendJson(res, 400, { error: 'realtor_id and direction (like|pass) are required' });
     }
-    const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(clientId);
+    const client = getClientById(clientId);
     const realtor = db.prepare('SELECT * FROM realtors WHERE id = ?').get(realtorId);
     if (!client) return sendJson(res, 404, { error: 'client not found' });
     if (!realtor) return sendJson(res, 404, { error: 'realtor not found' });
@@ -273,9 +541,13 @@ async function handleApi(req, res, url) {
     });
   }
 
-  // GET /api/matches/:clientId
+  // GET /api/matches/:clientId  -> requires the signed-in client to be that same client.
   if (req.method === 'GET' && parts[1] === 'matches' && parts.length === 3) {
     const clientId = Number(parts[2]);
+    const session = getCurrentSession(req);
+    if (!session || session.subject_type !== 'client' || session.subject_id !== clientId) {
+      return sendJson(res, 401, { error: 'Please log in to view matches.' });
+    }
     const rows = db.prepare(`
       SELECT r.*, s.created_at AS matched_at FROM swipes s
       JOIN realtors r ON r.id = s.realtor_id
@@ -287,28 +559,66 @@ async function handleApi(req, res, url) {
     });
   }
 
-  // GET /api/realtor/:id  -> profile (for the realtor's own dashboard header)
+  // GET /api/realtor/:id  -> profile, for the realtor's own dashboard header. Only the
+  // signed-in owner of that profile can view it (it includes subscription/billing info).
   if (req.method === 'GET' && parts[1] === 'realtor' && parts.length === 3) {
-    const realtor = db.prepare('SELECT * FROM realtors WHERE id = ?').get(Number(parts[2]));
+    const id = Number(parts[2]);
+    const session = getCurrentSession(req);
+    if (!session || session.subject_type !== 'realtor' || session.subject_id !== id) {
+      return sendJson(res, 401, { error: 'Please log in to view this dashboard.' });
+    }
+    const realtor = getRealtorById(id);
     if (!realtor) return sendJson(res, 404, { error: 'realtor not found' });
     return sendJson(res, 200, { realtor: realtorToOwner(realtor) });
   }
 
-  // POST /api/agents/signup  { name, brokerage, email, phone, bio, specialties, areas, state, yearsExperience, photoEmoji }
+  // POST /api/agents/signup  { name, brokerage, email, phone, bio, specialties, areas, state,
+  // yearsExperience, photoEmoji, and exactly one of: password, googleIdToken, appleIdToken }
   // Creates (or reuses a not-yet-paid) realtor row, then starts a Stripe subscription checkout.
   if (req.method === 'POST' && parts[1] === 'agents' && parts[2] === 'signup' && parts.length === 3) {
     const body = await readBody(req);
     const name = (body.name || '').trim();
-    const email = (body.email || '').trim();
+    let email = (body.email || '').trim();
     if (!name) return sendJson(res, 400, { error: 'name is required' });
-    if (!email) return sendJson(res, 400, { error: 'email is required' });
     if (!STRIPE_PRICE_ID) {
       return sendJson(res, 503, { error: 'Agent subscriptions are not configured yet. Set STRIPE_PRICE_ID.' });
     }
 
+    // Exactly one signup method: password, Google, or Apple. For OAuth, the email comes
+    // from the verified token (never trusted from the request body).
+    let passwordHash = null, googleId = null, appleId = null, emailVerified = false;
+    if (body.googleIdToken) {
+      if (!GOOGLE_CLIENT_ID) return sendJson(res, 503, { error: 'Google sign-in is not configured yet.' });
+      let payload;
+      try { payload = await verifyGoogleIdToken(body.googleIdToken, GOOGLE_CLIENT_ID); }
+      catch (e) { return sendJson(res, 401, { error: 'Could not verify Google sign-in: ' + e.message }); }
+      googleId = payload.sub;
+      email = payload.email;
+      emailVerified = true;
+    } else if (body.appleIdToken) {
+      if (!APPLE_SERVICES_ID) return sendJson(res, 503, { error: 'Apple sign-in is not configured yet.' });
+      let payload;
+      try { payload = await verifyAppleIdToken(body.appleIdToken, APPLE_SERVICES_ID); }
+      catch (e) { return sendJson(res, 401, { error: 'Could not verify Apple sign-in: ' + e.message }); }
+      appleId = payload.sub;
+      email = payload.email;
+      emailVerified = true;
+    } else {
+      const password = String(body.password || '');
+      if (password.length < 8) return sendJson(res, 400, { error: 'Password must be at least 8 characters.' });
+      passwordHash = hashPassword(password);
+    }
+    if (!email) return sendJson(res, 400, { error: 'email is required' });
+
     const existing = getRealtorByEmail(email);
     if (existing && existing.subscription_status === 'active') {
       return sendJson(res, 409, { error: 'An agent with this email is already listed and active.' });
+    }
+    // Password signups can't "claim" an already-claimed account just by typing its email —
+    // but Google/Apple tokens prove real ownership of that email, so those are allowed to
+    // link to (and update) an existing row even if it was claimed a different way before.
+    if (existing && passwordHash && isRealtorClaimed(existing)) {
+      return sendJson(res, 409, { error: 'An account with this email already exists. Please log in instead.' });
     }
 
     const realtor = upsertPendingRealtor({
@@ -319,21 +629,34 @@ async function handleApi(req, res, url) {
       specialties: Array.isArray(body.specialties) ? body.specialties.join(',') : (body.specialties || '').trim(),
       areas: Array.isArray(body.areas) ? body.areas.join(',') : (body.areas || '').trim(),
       state: (body.state || '').trim().toUpperCase().slice(0, 2) || null,
+      passwordHash, googleId, appleId, emailVerified,
       yearsExperience: body.yearsExperience ? Number(body.yearsExperience) : null,
       phone: (body.phone || '').trim(),
       email,
     });
 
+    if (!emailVerified) {
+      const verifyToken = randomToken();
+      setRealtorVerifyToken(realtor.id, verifyToken, sqliteFutureTimestamp(VERIFY_TOKEN_TTL_MS));
+      sendVerificationEmail(realtor.email, `https://${req.headers.host}/verify-email.html?token=${verifyToken}&role=realtor`);
+    }
+
+    // Sign them in immediately — payment hasn't happened yet, but the account (and its
+    // dashboard, once active) belongs to them starting now.
+    const sessionToken = randomToken();
+    createSession('realtor', realtor.id, sessionToken);
+    setSessionCookie(req, res, sessionToken);
+
     const origin = `https://${req.headers.host}`;
     try {
-      const session = await stripe.createCheckoutSession({
+      const checkout = await stripe.createCheckoutSession({
         priceId: STRIPE_PRICE_ID,
         successUrl: `${origin}/agent-success.html?session_id={CHECKOUT_SESSION_ID}&realtor_id=${realtor.id}`,
         cancelUrl: `${origin}/agent-signup.html?canceled=1`,
         customerEmail: email,
         realtorId: realtor.id,
       });
-      return sendJson(res, 200, { checkoutUrl: session.url });
+      return sendJson(res, 200, { checkoutUrl: checkout.url });
     } catch (e) {
       console.error('Stripe checkout session error:', e.message);
       return sendJson(res, 502, { error: 'Could not start checkout: ' + e.message });
@@ -361,9 +684,14 @@ async function handleApi(req, res, url) {
     }
   }
 
-  // GET /api/realtor/:id/leads  -> clients who matched with this realtor (leads inbox)
+  // GET /api/realtor/:id/leads  -> clients who matched with this realtor (leads inbox).
+  // Contains client contact info, so it's restricted to that realtor's own session.
   if (req.method === 'GET' && parts[1] === 'realtor' && parts[3] === 'leads' && parts.length === 4) {
     const realtorId = Number(parts[2]);
+    const leadsSession = getCurrentSession(req);
+    if (!leadsSession || leadsSession.subject_type !== 'realtor' || leadsSession.subject_id !== realtorId) {
+      return sendJson(res, 401, { error: 'Please log in to view your leads.' });
+    }
     const rows = db.prepare(`
       SELECT c.*, s.created_at AS matched_at FROM swipes s
       JOIN clients c ON c.id = s.client_id
