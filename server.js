@@ -114,8 +114,44 @@ function clientToPublic(row) {
     intent: row.intent,
     areaInterest: row.area_interest,
     state: row.state,
+    timeline: row.timeline || null,
+    budgetRange: row.budget_range || null,
+    propertyType: row.property_type || null,
     emailVerified: Boolean(row.email_verified),
   };
+}
+
+// ---------------- Client <-> realtor match scoring ----------------
+// Realtor `specialties` and `areas` are free-text, comma-separated tags an agent typed in
+// themselves (no controlled taxonomy) — so this is a soft heuristic ranking, not an exact
+// filter. It only ever re-orders the deck; it never removes a realtor from it, so a client
+// who skips every optional question still sees every eligible agent, just in original order.
+const INTENT_KEYWORDS = {
+  buy: ['buyer', 'first-time buyer'],
+  sell: ['seller', 'listing'],
+  invest: ['investor', 'multi-family', 'commercial', 'short-term rental'],
+  rent: ['rent', 'rental', 'renter'],
+};
+
+function matchScore(client, realtor) {
+  if (!client) return 0;
+  let score = 0;
+  const specialties = (realtor.specialties || '').toLowerCase();
+  const areas = (realtor.areas || '').toLowerCase();
+
+  // Strongest signal: does this agent work with buyers/sellers/investors/renters?
+  const keywords = INTENT_KEYWORDS[(client.intent || '').toLowerCase()] || [];
+  if (keywords.some((kw) => specialties.includes(kw))) score += 3;
+
+  // Does the agent list the client's city/neighborhood as a service area?
+  const area = (client.area_interest || '').toLowerCase().trim();
+  if (area && areas.includes(area)) score += 2;
+
+  // Does the agent's specialty list mention the client's preferred property type?
+  const propKeyword = (client.property_type || '').toLowerCase().split(/[\s/]+/)[0];
+  if (propKeyword && specialties.includes(propKeyword)) score += 1;
+
+  return score;
 }
 
 const MIME = {
@@ -442,6 +478,9 @@ async function handleApi(req, res, url) {
       intent: (body.intent || '').trim() || null,
       area: (body.area || '').trim() || null,
       state: (body.state || '').trim().toUpperCase().slice(0, 2) || null,
+      timeline: (body.timeline || '').trim() || null,
+      budgetRange: (body.budget || '').trim() || null,
+      propertyType: (body.propertyType || '').trim() || null,
     });
     return sendJson(res, 200, { client: clientToPublic(client) });
   }
@@ -487,20 +526,27 @@ async function handleApi(req, res, url) {
   // scoped to their state. A realtor with no state set is treated as visible everywhere
   // (see the migration note in db.js) so profiles never silently disappear. Requires login —
   // client_id is taken from the session now, never from the query string.
+  //
+  // Eligibility (state/subscription/not-already-swiped) is still a hard SQL filter — nobody
+  // is ever excluded based on match quality. Ordering on top of that is a soft ranking by
+  // matchScore(), so a client who answered the optional "help us match you" questions sees
+  // their best-fit agents first, while a client who skipped them still sees everyone, just in
+  // insertion order (score 0 for all == stable id order, same as before this feature shipped).
   if (req.method === 'GET' && parts[1] === 'realtors' && parts.length === 2) {
     const session = getCurrentSession(req);
     const clientId = session && session.subject_type === 'client' ? session.subject_id : null;
     let rows;
+    let client = null;
     if (clientId) {
-      const client = getClientById(clientId);
+      client = getClientById(clientId);
       const clientState = client && client.state;
       rows = db.prepare(`
         SELECT * FROM realtors
         WHERE subscription_status = 'active'
           AND (state IS NULL OR state = '' OR state = ?)
           AND id NOT IN (SELECT realtor_id FROM swipes WHERE client_id = ?)
-        ORDER BY id
       `).all(clientState || '', clientId);
+      rows.sort((a, b) => matchScore(client, b) - matchScore(client, a) || a.id - b.id);
     } else {
       rows = db.prepare(`SELECT * FROM realtors WHERE subscription_status = 'active' ORDER BY id`).all();
     }
@@ -701,7 +747,9 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, {
       leads: rows.map((c) => ({
         id: c.id, name: c.name, phone: c.phone, email: c.email,
-        intent: c.intent, areaInterest: c.area_interest, state: c.state, matchedAt: c.matched_at,
+        intent: c.intent, areaInterest: c.area_interest, state: c.state,
+        timeline: c.timeline || null, budgetRange: c.budget_range || null, propertyType: c.property_type || null,
+        matchedAt: c.matched_at,
       })),
     });
   }

@@ -123,6 +123,22 @@ function migrate() {
       }
     }
   }
+
+  // Optional "help us match you" signals collected on the complete-profile step. All three
+  // are optional — a client can hit "Start swiping" without touching any of them (each field
+  // defaults to "No preference" in the UI) — so NULL here just means "wasn't asked/answered",
+  // never an error state.
+  const matchColumns = [
+    ['timeline', 'TEXT'],
+    ['budget_range', 'TEXT'],
+    ['property_type', 'TEXT'],
+  ];
+  for (const [col, def] of matchColumns) {
+    if (!columnExists('clients', col)) {
+      db.exec(`ALTER TABLE clients ADD COLUMN ${col} ${def}`);
+      console.log(`Migrated: added clients.${col}`);
+    }
+  }
 }
 
 function seed() {
@@ -475,9 +491,14 @@ function updateClientProfile(id, fields) {
   db.prepare(`
     UPDATE clients SET
       name = COALESCE(?, name), phone = COALESCE(?, phone), intent = COALESCE(?, intent),
-      area_interest = COALESCE(?, area_interest), state = COALESCE(?, state)
+      area_interest = COALESCE(?, area_interest), state = COALESCE(?, state),
+      timeline = COALESCE(?, timeline), budget_range = COALESCE(?, budget_range),
+      property_type = COALESCE(?, property_type)
     WHERE id = ?
-  `).run(fields.name || null, fields.phone || null, fields.intent || null, fields.area || null, fields.state || null, id);
+  `).run(
+    fields.name || null, fields.phone || null, fields.intent || null, fields.area || null, fields.state || null,
+    fields.timeline || null, fields.budgetRange || null, fields.propertyType || null, id
+  );
   return getClientById(id);
 }
 
