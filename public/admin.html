@@ -557,7 +557,7 @@
         const table = el(`
           <table class="client-table">
             <thead>
-              <tr><th>Name</th><th>Phone</th><th>Email</th><th>Looking to</th><th>City</th><th>State</th><th>Signed up</th></tr>
+              <tr><th>Name</th><th>Phone</th><th>Email</th><th>Looking to</th><th>City</th><th>State</th><th>Signed up</th><th></th></tr>
             </thead>
             <tbody></tbody>
           </table>
@@ -573,8 +573,19 @@
               <td class="${c.areaInterest ? '' : 'muted'}">${esc(c.areaInterest) || '—'}</td>
               <td class="${c.state ? '' : 'muted'}">${esc(c.state) || '—'}</td>
               <td class="muted">${esc(c.createdAt)}</td>
+              <td><button class="remove-photo-btn delete-client-btn" type="button">Delete</button></td>
             </tr>
           `);
+          row.querySelector('.delete-client-btn').addEventListener('click', async () => {
+            if (!confirm('Delete ' + (c.name || 'this signup') + '? This cannot be undone.')) return;
+            try {
+              await adminApi('/clients/' + c.id, { method: 'DELETE' });
+              loadClients();
+              loadStats();
+            } catch (ex) {
+              alert(ex.message);
+            }
+          });
           tbody.appendChild(row);
         });
         tableWrap.appendChild(table);
