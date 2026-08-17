@@ -57,6 +57,11 @@
   table.client-table td { padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,0.06); vertical-align: top; }
   table.client-table tr:last-child td { border-bottom: none; }
   table.client-table td.muted { color: rgba(255,255,255,0.4); }
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 8px; }
+  .stat-card { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 18px 20px; }
+  .stat-card .stat-value { font-size: 32px; font-weight: 800; color: var(--gold); line-height: 1.1; }
+  .stat-card .stat-label { font-size: 12.5px; color: rgba(255,255,255,0.6); margin-top: 6px; }
+  .stat-card .stat-sub { font-size: 11.5px; color: rgba(255,255,255,0.4); margin-top: 3px; }
 </style>
 </head>
 <body>
@@ -277,10 +282,14 @@
             <button class="logout-btn" id="logout-btn">Log out</button>
           </div>
           <div class="admin-tabs">
-            <button id="tab-realtors" class="active">Realtors</button>
+            <button id="tab-stats" class="active">Overview</button>
+            <button id="tab-realtors">Realtors</button>
             <button id="tab-clients">Client Signups</button>
           </div>
-          <div id="realtors-view">
+          <div id="stats-view">
+            <div id="stats-content">Loading…</div>
+          </div>
+          <div id="realtors-view" style="display:none;">
             <button class="btn btn-secondary add-toggle" id="add-toggle-btn">+ Add new realtor</button>
             <div id="add-form-wrap"></div>
             <div id="realtor-list">Loading…</div>
@@ -294,17 +303,23 @@
         sessionStorage.removeItem(PW_KEY);
         renderLogin();
       });
+      function showTab(name) {
+        document.getElementById('tab-stats').classList.toggle('active', name === 'stats');
+        document.getElementById('tab-realtors').classList.toggle('active', name === 'realtors');
+        document.getElementById('tab-clients').classList.toggle('active', name === 'clients');
+        document.getElementById('stats-view').style.display = name === 'stats' ? '' : 'none';
+        document.getElementById('realtors-view').style.display = name === 'realtors' ? '' : 'none';
+        document.getElementById('clients-view').style.display = name === 'clients' ? '' : 'none';
+      }
+      document.getElementById('tab-stats').addEventListener('click', () => {
+        showTab('stats');
+        loadStats();
+      });
       document.getElementById('tab-realtors').addEventListener('click', () => {
-        document.getElementById('tab-realtors').classList.add('active');
-        document.getElementById('tab-clients').classList.remove('active');
-        document.getElementById('realtors-view').style.display = '';
-        document.getElementById('clients-view').style.display = 'none';
+        showTab('realtors');
       });
       document.getElementById('tab-clients').addEventListener('click', () => {
-        document.getElementById('tab-clients').classList.add('active');
-        document.getElementById('tab-realtors').classList.remove('active');
-        document.getElementById('clients-view').style.display = '';
-        document.getElementById('realtors-view').style.display = 'none';
+        showTab('clients');
         loadClients();
       });
       document.getElementById('add-toggle-btn').addEventListener('click', () => {
@@ -348,7 +363,37 @@
           }
         });
       });
+      loadStats();
       loadList();
+    }
+
+    async function loadStats() {
+      const contentEl = document.getElementById('stats-content');
+      try {
+        const { stats } = await adminApi('/stats');
+        contentEl.innerHTML = '';
+        contentEl.appendChild(el(`
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-value">${stats.totalRealtors}</div>
+              <div class="stat-label">Total agents</div>
+              <div class="stat-sub">${stats.activeRealtors} active / ${stats.totalRealtors - stats.activeRealtors} inactive</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">${stats.totalClients}</div>
+              <div class="stat-label">Total users</div>
+              <div class="stat-sub">Everyone who completed signup</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">${stats.matchedClients}</div>
+              <div class="stat-label">Users with a match</div>
+              <div class="stat-sub">Liked at least one agent</div>
+            </div>
+          </div>
+        `));
+      } catch (ex) {
+        contentEl.innerHTML = '<p class="hint">Couldn\'t load stats: ' + esc(ex.message) + '</p>';
+      }
     }
 
     async function loadList() {
