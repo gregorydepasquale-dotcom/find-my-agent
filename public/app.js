@@ -180,7 +180,7 @@
     app.innerHTML = '';
     app.appendChild(el(`
       <div class="screen onboarding">
-        <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
+        <div class="brand"><span class="brand-text">Agen<span class="accent">tr</span></span></div>
         <h1>${isSignup ? 'Create your<br/>account.' : 'Welcome<br/>back.'}</h1>
         <p class="sub">${isSignup ? "We'll save your matches so you can pick up right where you left off." : 'Log in to see your matches and keep swiping.'}</p>
         <div id="oauth-container"></div>
@@ -250,7 +250,7 @@
     app.innerHTML = '';
     app.appendChild(el(`
       <div class="screen onboarding">
-        <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
+        <div class="brand"><span class="brand-text">Agen<span class="accent">tr</span></span></div>
         <h1>Reset your<br/>password.</h1>
         <p class="sub">Enter your email and we'll send you a reset link.</p>
         <div class="error-banner" id="fp-msg" style="display:none;"></div>
@@ -293,7 +293,7 @@
     app.innerHTML = '';
     app.appendChild(el(`
       <div class="screen onboarding">
-        <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
+        <div class="brand"><span class="brand-text">Agen<span class="accent">tr</span></span></div>
         <h1>Swipe. Match.<br/>Meet your agent.</h1>
         <p class="sub">Tell us a bit about what you're looking for, then swipe through agents near you to find the right fit.</p>
         <form id="profile-form" style="display:flex; flex-direction:column; gap:14px;">
@@ -404,7 +404,7 @@
       const wrap = el(`
         <div style="display:flex; flex-direction:column; min-height:100vh; min-height:100dvh; width:100%;">
           <div class="topbar">
-            <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
+            <div class="brand"><span class="brand-text">Agen<span class="accent">tr</span></span></div>
             <button class="btn btn-secondary" id="logout-btn" style="padding:8px 14px; font-size:12px;">Log out</button>
           </div>
           <div id="tab-content" style="flex:1; display:flex; flex-direction:column;"></div>
@@ -731,7 +731,7 @@
     const wrap = el(`
       <div style="display:flex; flex-direction:column; min-height:100vh; min-height:100dvh;">
         <div class="topbar">
-          <div class="brand"><img src="/img/ikonick-logo.png" alt="IKONICK" /><span class="brand-text">Agen<span class="accent">tr</span></span></div>
+          <div class="brand"><span class="brand-text">Agen<span class="accent">tr</span></span></div>
           <a href="/" class="btn btn-secondary" style="padding:8px 14px; font-size:12px; text-decoration:none; color:white;">Client view</a>
         </div>
         <div id="dash-content">
