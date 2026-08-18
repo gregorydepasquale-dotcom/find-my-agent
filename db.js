@@ -354,6 +354,7 @@ function updateRealtorAdmin(id, fields) {
 
 function deleteRealtorAdmin(id) {
   db.prepare('DELETE FROM swipes WHERE realtor_id = ?').run(id);
+  db.prepare("DELETE FROM sessions WHERE subject_type = 'realtor' AND subject_id = ?").run(id);
   const info = db.prepare('DELETE FROM realtors WHERE id = ?').run(id);
   return info.changes > 0;
 }

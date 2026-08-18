@@ -487,6 +487,16 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { client: clientToPublic(client) });
   }
 
+  // DELETE /api/clients/me  -> self-service account deletion. Session-authenticated only —
+  // a client can only ever delete their own account, never another one.
+  if (req.method === 'DELETE' && parts[1] === 'clients' && parts[2] === 'me' && parts.length === 3) {
+    const session = getCurrentSession(req);
+    if (!session || session.subject_type !== 'client') return sendJson(res, 401, { error: 'Please log in.' });
+    deleteClientAdmin(session.subject_id);
+    clearSessionCookie(req, res);
+    return sendJson(res, 200, { ok: true });
+  }
+
   // POST /api/clients  { name, phone, email, password, intent, area, state }
   if (req.method === 'POST' && parts[1] === 'clients' && parts.length === 2) {
     const body = await readBody(req);
@@ -638,6 +648,22 @@ async function handleApi(req, res, url) {
     const realtor = getRealtorById(id);
     if (!realtor) return sendJson(res, 404, { error: 'realtor not found' });
     return sendJson(res, 200, { realtor: realtorToOwner(realtor) });
+  }
+
+  // DELETE /api/realtor/me  -> self-service account deletion. Session-authenticated only —
+  // a realtor can only ever delete their own profile, never another one. Best-effort cancels
+  // any active Stripe subscription first so deleting the account also stops future billing.
+  if (req.method === 'DELETE' && parts[1] === 'realtor' && parts[2] === 'me' && parts.length === 3) {
+    const session = getCurrentSession(req);
+    if (!session || session.subject_type !== 'realtor') return sendJson(res, 401, { error: 'Please log in.' });
+    const realtor = getRealtorById(session.subject_id);
+    if (realtor && realtor.stripe_subscription_id) {
+      try { await stripe.cancelSubscription(realtor.stripe_subscription_id); }
+      catch (e) { console.error('Failed to cancel Stripe subscription on account deletion:', e.message); }
+    }
+    deleteRealtorAdmin(session.subject_id);
+    clearSessionCookie(req, res);
+    return sendJson(res, 200, { ok: true });
   }
 
   // POST /api/agents/signup  { name, brokerage, email, phone, bio, specialties, areas, state,

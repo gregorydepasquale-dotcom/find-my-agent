@@ -97,6 +97,12 @@ function retrieveSubscription(subscriptionId) {
   return stripeRequest('GET', `/v1/subscriptions/${subscriptionId}`);
 }
 
+// Cancels immediately (not at period end) — used when a realtor deletes their own account,
+// so closing the account also stops future billing rather than leaving the subscription active.
+function cancelSubscription(subscriptionId) {
+  return stripeRequest('DELETE', `/v1/subscriptions/${subscriptionId}`);
+}
+
 // Verifies the Stripe-Signature header against the raw request body without needing the SDK.
 function verifyWebhookSignature(rawBody, signatureHeader, webhookSecret, toleranceSeconds = 300) {
   if (!webhookSecret) throw new Error('STRIPE_WEBHOOK_SECRET is not configured');
@@ -132,5 +138,6 @@ module.exports = {
   createCheckoutSession,
   createBillingPortalSession,
   retrieveSubscription,
+  cancelSubscription,
   verifyWebhookSignature,
 };
