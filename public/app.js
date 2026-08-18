@@ -415,6 +415,9 @@
             <button data-tab="matches" class="${currentTab === 'matches' ? 'active' : ''}">
               <span class="ic">💬</span>Matches
             </button>
+            <button data-tab="account" class="${currentTab === 'account' ? 'active' : ''}">
+              <span class="ic">⚙️</span>Account
+            </button>
           </div>
         </div>
       `);
@@ -437,9 +440,40 @@
     function draw() {
       if (currentTab === 'swipe') {
         drawSwipe();
-      } else {
+      } else if (currentTab === 'matches') {
         drawMatches();
+      } else {
+        drawAccount();
       }
+    }
+
+    function drawAccount() {
+      shell(`
+        <div class="screen" style="padding-top:16px;">
+          <div style="background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:20px;">
+            <h3 style="margin:0 0 4px;">Account</h3>
+            <p style="color:rgba(255,255,255,0.6); font-size:13px; margin:0 0 18px;">Manage your Agentr account.</p>
+            <button class="btn btn-secondary" id="delete-account-btn" style="border-color:#c0392b; color:#e57368;">Delete my account</button>
+            <p style="color:rgba(255,255,255,0.4); font-size:12px; margin-top:10px;">This permanently deletes your profile, matches, and swipe history. This cannot be undone.</p>
+            <div class="error-banner" id="delete-account-error" style="display:none;"></div>
+          </div>
+        </div>
+      `);
+      const btn = document.getElementById('delete-account-btn');
+      btn.addEventListener('click', async () => {
+        if (!confirm('Delete your Agentr account? This permanently removes your profile and matches and cannot be undone.')) return;
+        if (!confirm('Are you sure? This is your last chance to cancel.')) return;
+        const errBox = document.getElementById('delete-account-error');
+        btn.disabled = true; btn.textContent = 'Deleting…';
+        try {
+          await api('/clients/me', { method: 'DELETE' });
+          renderOnboarding();
+        } catch (e) {
+          btn.disabled = false; btn.textContent = 'Delete my account';
+          errBox.textContent = e.message || 'Something went wrong. Please try again.';
+          errBox.style.display = 'block';
+        }
+      });
     }
 
     function drawSwipe() {
@@ -742,6 +776,8 @@
         ${leadItems}
         <p class="hint">This is your leads inbox — everyone who swiped right on your profile shows up here.</p>
         <button class="btn btn-secondary" id="dash-logout" style="margin-top:14px;">Log out</button>
+        <button id="dash-delete-account" style="display:block; margin:14px auto 0; background:none; border:none; color:#e57368; font-size:12.5px; text-decoration:underline; cursor:pointer; padding:0;">Delete my account</button>
+        <div class="error-banner" id="dash-delete-error" style="display:none; margin-top:12px;"></div>
       `;
 
       const billingBtn = content.querySelector('#manage-billing');
@@ -762,6 +798,21 @@
       content.querySelector('#dash-logout').addEventListener('click', async () => {
         try { await api('/auth/logout', { method: 'POST' }); } catch (e) { /* ignore */ }
         window.location.href = '/realtor-login.html';
+      });
+      const deleteBtn = content.querySelector('#dash-delete-account');
+      deleteBtn.addEventListener('click', async () => {
+        if (!confirm('Delete your Agentr agent profile? This removes your listing, leads, and cancels any active subscription. This cannot be undone.')) return;
+        if (!confirm('Are you sure? This is your last chance to cancel.')) return;
+        const errBox = content.querySelector('#dash-delete-error');
+        deleteBtn.disabled = true; deleteBtn.textContent = 'Deleting…';
+        try {
+          await api('/realtor/me', { method: 'DELETE' });
+          window.location.href = '/realtor-login.html';
+        } catch (err) {
+          deleteBtn.disabled = false; deleteBtn.textContent = 'Delete my account';
+          errBox.textContent = err.message || 'Something went wrong. Please try again.';
+          errBox.style.display = 'block';
+        }
       });
     }).catch((err) => {
       const needsLogin = /log in/i.test(err.message || '');
