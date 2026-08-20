@@ -39,6 +39,32 @@
     font-size: 14px;
     display: none;
   }
+  .state-check-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(68px, 1fr));
+    gap: 6px 10px;
+    max-height: 190px;
+    overflow-y: auto;
+    padding: 12px;
+    border-radius: 14px;
+    background: rgba(255,255,255,0.12);
+  }
+  .state-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: rgba(255,255,255,0.8);
+    cursor: pointer;
+  }
+  .state-check input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--gold);
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+  .state-check.checked { color: white; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -87,8 +113,9 @@
           <input type="text" name="specialties" placeholder="Buyers, First-Time Buyers, Condos" />
         </div>
         <div class="field">
-          <label>State you serve</label>
-          <select name="state" id="state-select" required></select>
+          <label>States you serve</label>
+          <div id="state-checks" class="state-check-grid"></div>
+          <p class="hint" style="margin:0;">Select every state you work in.</p>
         </div>
         <div class="field">
           <label>Cities / zip codes you serve (comma-separated)</label>
@@ -191,9 +218,16 @@
         ['TN', 'Tennessee'], ['TX', 'Texas'], ['UT', 'Utah'], ['VT', 'Vermont'], ['VA', 'Virginia'],
         ['WA', 'Washington'], ['WV', 'West Virginia'], ['WI', 'Wisconsin'], ['WY', 'Wyoming'],
       ];
-      document.getElementById('state-select').innerHTML =
-        '<option value="">Select a state…</option>' +
-        US_STATES.map(([code, name]) => `<option value="${code}">${name}</option>`).join('');
+      const stateChecksEl = document.getElementById('state-checks');
+      stateChecksEl.innerHTML = US_STATES.map(([code, name]) => `
+        <label class="state-check" title="${name}">
+          <input type="checkbox" name="state" value="${code}" /> ${code}
+        </label>
+      `).join('');
+      stateChecksEl.addEventListener('change', (e) => {
+        if (e.target.name !== 'state') return;
+        e.target.closest('.state-check').classList.toggle('checked', e.target.checked);
+      });
 
       const params = new URLSearchParams(window.location.search);
       const errorBanner = document.getElementById('error-banner');
@@ -209,6 +243,12 @@
         errorBanner.style.display = 'none';
         if (!oauthToken && String(fd.get('password') || '').length < 8) {
           errorBanner.textContent = 'Password must be at least 8 characters.';
+          errorBanner.style.display = 'block';
+          return;
+        }
+        const selectedStates = fd.getAll('state');
+        if (!selectedStates.length) {
+          errorBanner.textContent = 'Select at least one state you serve.';
           errorBanner.style.display = 'block';
           return;
         }
@@ -229,7 +269,7 @@
               yearsExperience: fd.get('yearsExperience'),
               specialties: fd.get('specialties'),
               areas: fd.get('areas'),
-              state: fd.get('state'),
+              state: selectedStates,
               bio: fd.get('bio'),
             }),
           });
