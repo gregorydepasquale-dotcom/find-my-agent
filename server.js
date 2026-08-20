@@ -227,6 +227,25 @@ function readRawBinaryBody(req, maxBytes) {
   });
 }
 
+// Realtors can now serve multiple states (e.g. an agent near a state line). Stored as a
+// comma-separated list of two-letter codes on realtors.state, same convention as
+// specialties/areas. Accepts either an array (from a multi-select/checkbox form) or a
+// comma-separated string, trims/uppercases/dedupes each code, and drops anything that isn't
+// exactly 2 letters (guards against stray free text ending up in what should be a code list).
+function normalizeStates(input) {
+  const raw = Array.isArray(input) ? input : String(input || '').split(',');
+  const seen = new Set();
+  const codes = [];
+  for (const item of raw) {
+    const code = String(item || '').trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(code) && !seen.has(code)) {
+      seen.add(code);
+      codes.push(code);
+    }
+  }
+  return codes.length ? codes.join(',') : null;
+}
+
 function realtorToPublic(row) {
   return {
     id: row.id,
@@ -279,6 +298,7 @@ function realtorToAdmin(row) {
     email: row.email || '',
     subscriptionStatus: row.subscription_status || 'inactive',
     state: row.state || '',
+    matchCount: row.match_count || 0,
   };
 }
 
@@ -296,7 +316,7 @@ function adminFieldsFromBody(body) {
     phone: (body.phone || '').trim(),
     email: (body.email || '').trim(),
     subscriptionStatus: body.subscriptionStatus === 'inactive' ? 'inactive' : 'active',
-    state: (body.state || '').trim().toUpperCase().slice(0, 2) || null,
+    state: normalizeStates(body.state),
   };
 }
 
@@ -539,6 +559,11 @@ async function handleApi(req, res, url) {
   // (see the migration note in db.js) so profiles never silently disappear. Requires login —
   // client_id is taken from the session now, never from the query string.
   //
+  // Realtors can serve multiple states now (realtors.state is a comma-separated code list,
+  // e.g. "TN,GA" — see normalizeStates), so the exact-match comparison became a substring
+  // check against a comma-delimited version of the column: wrapping both the column and the
+  // needle in commas means "TN" can't accidentally match "MTN" or similar.
+  //
   // Eligibility (state/subscription/not-already-swiped) is still a hard SQL filter — nobody
   // is ever excluded based on match quality. Ordering on top of that is a soft ranking by
   // matchScore(), so a client who answered the optional "help us match you" questions sees
@@ -551,13 +576,14 @@ async function handleApi(req, res, url) {
     let client = null;
     if (clientId) {
       client = getClientById(clientId);
-      const clientState = client && client.state;
+      const clientState = ((client && client.state) || '').trim().toUpperCase();
+      const statePattern = `%,${clientState},%`;
       rows = db.prepare(`
         SELECT * FROM realtors
         WHERE subscription_status = 'active'
-          AND (state IS NULL OR state = '' OR state = ?)
+          AND (state IS NULL OR state = '' OR (',' || state || ',') LIKE ?)
           AND id NOT IN (SELECT realtor_id FROM swipes WHERE client_id = ?)
-      `).all(clientState || '', clientId);
+      `).all(statePattern, clientId);
       rows.sort((a, b) => matchScore(client, b) - matchScore(client, a) || a.id - b.id);
     } else {
       rows = db.prepare(`SELECT * FROM realtors WHERE subscription_status = 'active' ORDER BY id`).all();
@@ -666,8 +692,10 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true });
   }
 
-  // POST /api/agents/signup  { name, brokerage, email, phone, bio, specialties, areas, state,
-  // yearsExperience, photoEmoji, and exactly one of: password, googleIdToken, appleIdToken }
+  // POST /api/agents/signup  { name, brokerage, email, phone, bio, specialties, areas,
+  // state (array of 2-letter codes, or a comma-separated string — an agent can serve more
+  // than one state), yearsExperience, photoEmoji, and exactly one of: password, googleIdToken,
+  // appleIdToken }
   // Creates (or reuses a not-yet-paid) realtor row, then starts a Stripe subscription checkout.
   if (req.method === 'POST' && parts[1] === 'agents' && parts[2] === 'signup' && parts.length === 3) {
     const body = await readBody(req);
@@ -722,7 +750,7 @@ async function handleApi(req, res, url) {
       bio: (body.bio || '').trim(),
       specialties: Array.isArray(body.specialties) ? body.specialties.join(',') : (body.specialties || '').trim(),
       areas: Array.isArray(body.areas) ? body.areas.join(',') : (body.areas || '').trim(),
-      state: (body.state || '').trim().toUpperCase().slice(0, 2) || null,
+      state: normalizeStates(body.state),
       passwordHash, googleId, appleId, emailVerified,
       yearsExperience: body.yearsExperience ? Number(body.yearsExperience) : null,
       phone: (body.phone || '').trim(),

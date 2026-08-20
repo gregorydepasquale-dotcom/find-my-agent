@@ -317,8 +317,17 @@ function updateRealtorSubscription(realtorId, { status, stripeCustomerId, stripe
 
 // ---------------- Admin helpers (manual profile management) ----------------
 
+// match_count is how many clients have swiped "like" on this realtor (i.e. how many times
+// they've been picked). Computed with a correlated subquery rather than a JOIN + GROUP BY so
+// realtors with zero matches still come back as a row (COUNT over an empty match set is 0,
+// not a missing row).
 function getAllRealtorsAdmin() {
-  return db.prepare('SELECT * FROM realtors ORDER BY id').all();
+  return db.prepare(`
+    SELECT r.*,
+      (SELECT COUNT(*) FROM swipes s WHERE s.realtor_id = r.id AND s.direction = 'like') AS match_count
+    FROM realtors r
+    ORDER BY r.id
+  `).all();
 }
 
 function createRealtorAdmin(fields) {
