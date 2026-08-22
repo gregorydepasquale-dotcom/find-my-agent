@@ -58,6 +58,17 @@
     return authConfigPromise;
   }
 
+  // True when running inside the native iOS/Android app shell (Capacitor injects
+  // `window.Capacitor` into every page it loads, even ones fetched live from the server like
+  // this one). Used to hide the Google sign-in button in-app so the app never offers a
+  // third-party login without an Apple-equivalent option (App Review guideline 4.8) — the
+  // regular website (opened in Safari/Chrome) is unaffected and still offers Google.
+  function isNativeApp() {
+    try {
+      return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
+    } catch (e) { return false; }
+  }
+
   function waitForGlobal(check, tries, interval) {
     return new Promise((resolve) => {
       (function attempt(n) {
@@ -78,7 +89,7 @@
     const row = el(`<div class="oauth-row"></div>`);
     container.appendChild(row);
 
-    if (cfg.googleClientId) {
+    if (cfg.googleClientId && !isNativeApp()) {
       const ready = await waitForGlobal(() => window.google && window.google.accounts && window.google.accounts.id);
       if (ready) {
         const slot = el(`<div class="oauth-btn-slot"></div>`);

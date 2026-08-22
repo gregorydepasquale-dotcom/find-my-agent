@@ -133,6 +133,18 @@
   </div>
   <script>
     (function () {
+      // True when this page is running inside the native iOS/Android app shell (Capacitor
+      // injects `window.Capacitor` into every page it loads, even ones fetched live from the
+      // server like this one). Used to gate things Apple's App Review guidelines don't allow
+      // inside a native app binary — a third-party login option without an Apple-equivalent
+      // (4.8), and purchasing a subscription by a mechanism other than In-App Purchase (3.1.1) —
+      // while leaving the regular website (opened in Safari/Chrome) completely unaffected.
+      function isNativeApp() {
+        try {
+          return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
+        } catch (e) { return false; }
+      }
+
       function decodeJwtPayload(token) {
         try {
           const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
@@ -173,7 +185,7 @@
           document.querySelector('#signup-form button[type=submit]').textContent = 'Continue to payment →';
         }
 
-        if (cfg.googleClientId && await waitForGlobal(() => window.google && window.google.accounts && window.google.accounts.id)) {
+        if (cfg.googleClientId && !isNativeApp() && await waitForGlobal(() => window.google && window.google.accounts && window.google.accounts.id)) {
           const slot = document.createElement('div');
           slot.className = 'oauth-btn-slot';
           row.appendChild(slot);
@@ -228,6 +240,25 @@
         if (e.target.name !== 'state') return;
         e.target.closest('.state-check').classList.toggle('checked', e.target.checked);
       });
+
+      // Apple's guideline 3.1.1 requires paid digital content/subscriptions to go through In-App
+      // Purchase, not an external payment mechanism like Stripe Checkout. Rather than build a
+      // separate native purchase path, the app simply doesn't offer this purchase at all — new
+      // agents complete the $49/mo signup on the website instead. Existing agents can still log
+      // in and use the app normally; only this specific "buy a subscription" screen is affected.
+      if (isNativeApp()) {
+        document.querySelector('.price-banner').outerHTML = `
+          <div class="price-banner">
+            Agent registration is completed on our website. Please open
+            <b>find-my-agent-production.up.railway.app/agent-signup.html</b> in Safari or your
+            computer's browser to list your profile and start your $49/month subscription.
+            Once you're signed up, come back here to log in and manage your leads.
+          </div>
+        `;
+        document.getElementById('oauth-container').style.display = 'none';
+        document.querySelector('.divider').style.display = 'none';
+        document.getElementById('signup-form').style.display = 'none';
+      }
 
       const params = new URLSearchParams(window.location.search);
       const errorBanner = document.getElementById('error-banner');
