@@ -739,6 +739,31 @@
   // ---------------- Realtor dashboard ----------------
   function renderRealtorDashboard(realtorId) {
     app.innerHTML = '';
+
+    // Apple's guideline 3.1.1 flags paid content/functionality that's accessible in the app
+    // without being purchasable via In-App Purchase. An agent's leads inbox is exactly that —
+    // unlocked by a subscription sold via Stripe on the website — so rather than build a full
+    // StoreKit/IAP purchase flow, the native app simply doesn't let agents view it at all. The
+    // regular website (opened in Safari/Chrome) is completely unaffected; agents log in and
+    // manage leads there as normal.
+    if (isNativeApp()) {
+      app.appendChild(el(`
+        <div style="display:flex; flex-direction:column; min-height:100vh; min-height:100dvh;">
+          <div class="topbar">
+            <div class="brand"><span class="brand-text">Agen<span class="accent">tr</span></span></div>
+            <a href="/" class="btn btn-secondary" style="padding:8px 14px; font-size:12px; text-decoration:none; color:white;">Client view</a>
+          </div>
+          <div class="dash-header"><h1>Agent dashboard</h1></div>
+          <div class="sub-banner sub-active">
+            Agent accounts are managed on our website. Please open
+            <b>find-my-agent-production.up.railway.app</b> in Safari or your computer's
+            browser to log in and view your leads.
+          </div>
+        </div>
+      `));
+      return;
+    }
+
     const wrap = el(`
       <div style="display:flex; flex-direction:column; min-height:100vh; min-height:100dvh;">
         <div class="topbar">
