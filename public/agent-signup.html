@@ -242,17 +242,18 @@
       });
 
       // Apple's guideline 3.1.1 requires paid digital content/subscriptions to go through In-App
-      // Purchase, not an external payment mechanism like Stripe Checkout. Rather than build a
-      // separate native purchase path, the app simply doesn't offer this purchase at all — new
-      // agents complete the $49/mo signup on the website instead. Existing agents can still log
-      // in and use the app normally; only this specific "buy a subscription" screen is affected.
+      // Purchase, not an external payment mechanism like Stripe Checkout — and treats any text
+      // that promotes an external, non-IAP purchase (a price, the word "subscription", a "sign
+      // up here" call to action) as part of that violation, even when it isn't a clickable
+      // payment button. So the native app doesn't just remove the purchase flow — it doesn't
+      // mention agent pricing or subscribing anywhere on this screen at all. Existing agents can
+      // still log in and use the app normally; only this specific registration screen is
+      // affected, and the regular website is completely unaffected.
       if (isNativeApp()) {
+        document.querySelector('.sub').textContent = 'Agent registration isn’t available in this app.';
         document.querySelector('.price-banner').outerHTML = `
           <div class="price-banner">
-            Agent registration is completed on our website. Please open
-            <b>find-my-agent-production.up.railway.app/agent-signup.html</b> in Safari or your
-            computer's browser to list your profile and start your $49/month subscription.
-            Once you're signed up, come back here to log in and manage your leads.
+            Agent accounts are managed on our website.
           </div>
         `;
         document.getElementById('oauth-container').style.display = 'none';

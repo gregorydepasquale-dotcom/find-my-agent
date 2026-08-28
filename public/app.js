@@ -162,6 +162,10 @@
   }
 
   function renderSplash() {
+    // Apple's guideline 3.1.1 treats any text that promotes an external, non-IAP purchase (a
+    // price, "subscribe", a "list your profile" call to action) as a violation even when it's
+    // not a clickable payment button — so the native app's very first screen must not mention
+    // agent pricing at all. The regular website is unaffected.
     app.innerHTML = '';
     app.appendChild(el(`
       <div class="screen splash">
@@ -176,7 +180,7 @@
           <p class="splash-sub">Swipe through real agent profiles and match with the right one for you. Free, no obligation.</p>
           <button class="btn btn-primary splash-cta" id="splash-start" type="button">Get Started</button>
           <p class="hint">Already have an account? <a href="#" id="splash-login" style="color:#fff;">Log in</a></p>
-          <p class="hint">Real estate agent? <a href="/agent-signup.html" style="color:#fff;">List your profile — $49/mo</a></p>
+          ${isNativeApp() ? '' : '<p class="hint">Real estate agent? <a href="/agent-signup.html" style="color:#fff;">List your profile — $49/mo</a></p>'}
           <p class="hint" style="margin-top:-4px;"><a href="/privacy.html" style="color:rgba(255,255,255,0.5);">Privacy Policy</a></p>
         </div>
       </div>

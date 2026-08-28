@@ -52,7 +52,7 @@
         <button class="btn btn-primary" type="submit">Log in →</button>
         <p class="hint" style="margin:-6px 0 0;"><a href="#" id="forgot-link" style="color:#fff;">Forgot password?</a></p>
       </form>
-      <p class="hint">New here? <a href="/agent-signup.html" style="color:#fff;">List your profile — $49/mo</a></p>
+      <p class="hint" id="new-here-hint">New here? <a href="/agent-signup.html" style="color:#fff;">List your profile — $49/mo</a></p>
       <p class="hint"><a href="/" style="color:rgba(255,255,255,0.6);">← Back to client view</a></p>
     </div>
   </div>
@@ -143,16 +143,20 @@
       setupOAuthButtons();
 
       // Apple's guideline 3.1.1 flags paid content/functionality that's accessible in the app
-      // without being purchasable via In-App Purchase. An agent's leads inbox is exactly that —
+      // without being purchasable via In-App Purchase — and treats any text that promotes an
+      // external, non-IAP purchase (a price, "subscribe", "list your profile") as part of that,
+      // even when it isn't a clickable payment button. An agent's leads inbox is paid content —
       // unlocked by a subscription sold via Stripe on the website — so rather than build a full
       // StoreKit/IAP purchase flow, the native app doesn't let agents log in and reach it at
-      // all. The regular website (opened in Safari/Chrome) is completely unaffected — agents
-      // log in and manage leads there as normal.
+      // all, and doesn't mention agent pricing anywhere on this screen either. The regular
+      // website (opened in Safari/Chrome) is completely unaffected — agents log in, sign up,
+      // and manage leads there as normal.
       if (isNativeApp()) {
         document.querySelector('.sub').textContent = 'Agent accounts are managed on our website.';
         document.getElementById('oauth-container').style.display = 'none';
         document.querySelector('.divider').style.display = 'none';
         document.getElementById('error-banner').style.display = 'none';
+        document.getElementById('new-here-hint').style.display = 'none';
         document.getElementById('login-form').outerHTML = `
           <div class="price-banner">
             Please open <b>find-my-agent-production.up.railway.app</b> in Safari or your
