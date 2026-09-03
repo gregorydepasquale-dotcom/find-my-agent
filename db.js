@@ -79,6 +79,12 @@ function migrate() {
     ['photo_url', 'TEXT'],
     ['state', 'TEXT'],
     ['video_url', 'TEXT'],
+    // Native iOS subscriptions (RevenueCat/StoreKit) vs. website subscriptions (Stripe) —
+    // 'subscription_platform' records which one is currently paying, and
+    // 'apple_original_transaction_id' is Apple's stable per-subscriber id (from RevenueCat's
+    // webhook payload), kept around purely for support/debugging lookups.
+    ['subscription_platform', 'TEXT'],
+    ['apple_original_transaction_id', 'TEXT'],
   ];
   for (const [col, def] of newColumns) {
     if (!columnExists('realtors', col)) {
@@ -300,7 +306,9 @@ function upsertPendingRealtor(fields) {
   return db.prepare('SELECT * FROM realtors WHERE id = ?').get(info.lastInsertRowid);
 }
 
-function updateRealtorSubscription(realtorId, { status, stripeCustomerId, stripeSubscriptionId, currentPeriodEnd }) {
+function updateRealtorSubscription(realtorId, {
+  status, stripeCustomerId, stripeSubscriptionId, currentPeriodEnd, platform, appleOriginalTransactionId,
+}) {
   const current = db.prepare('SELECT * FROM realtors WHERE id = ?').get(realtorId);
   if (!current) return null;
   db.prepare(`
@@ -309,9 +317,14 @@ function updateRealtorSubscription(realtorId, { status, stripeCustomerId, stripe
       stripe_customer_id = COALESCE(?, stripe_customer_id),
       stripe_subscription_id = COALESCE(?, stripe_subscription_id),
       subscription_current_period_end = COALESCE(?, subscription_current_period_end),
+      subscription_platform = COALESCE(?, subscription_platform),
+      apple_original_transaction_id = COALESCE(?, apple_original_transaction_id),
       subscription_updated_at = datetime('now')
     WHERE id = ?
-  `).run(status, stripeCustomerId || null, stripeSubscriptionId || null, currentPeriodEnd || null, realtorId);
+  `).run(
+    status, stripeCustomerId || null, stripeSubscriptionId || null, currentPeriodEnd || null,
+    platform || null, appleOriginalTransactionId || null, realtorId
+  );
   return db.prepare('SELECT * FROM realtors WHERE id = ?').get(realtorId);
 }
 

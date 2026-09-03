@@ -71,6 +71,17 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const APPLE_SERVICES_ID = process.env.APPLE_SERVICES_ID || '';
 const APPLE_REDIRECT_URI = process.env.APPLE_REDIRECT_URI || '';
+// Native iOS subscription (RevenueCat -> StoreKit), parallel to the Stripe/website setup above.
+// REVENUECAT_IOS_API_KEY is RevenueCat's public "Apple App Store" API key (safe to expose to
+// the client, same trust level as a Stripe publishable key) — the frontend fetches it from
+// /api/auth/config rather than hardcoding it, so it can be set/rotated purely via env var.
+// REVENUECAT_WEBHOOK_SECRET is a value you choose yourself and paste into both this env var and
+// RevenueCat's dashboard (Project Settings -> Integrations -> Webhooks -> Authorization header
+// value) — RevenueCat echoes it back in every webhook call so we can confirm the request is
+// really from RevenueCat.
+const REVENUECAT_IOS_API_KEY = process.env.REVENUECAT_IOS_API_KEY || '';
+const REVENUECAT_WEBHOOK_SECRET = process.env.REVENUECAT_WEBHOOK_SECRET || '';
+const APPLE_AGENT_PRO_PRODUCT_ID = process.env.APPLE_AGENT_PRO_PRODUCT_ID || 'com.ikonickproperties.findmyagent.agentpro.monthly';
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 const VERIFY_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const PHOTO_MIME_EXT = {
@@ -332,6 +343,8 @@ async function handleApi(req, res, url) {
         googleClientId: GOOGLE_CLIENT_ID || null,
         appleServicesId: APPLE_SERVICES_ID || null,
         appleRedirectUri: APPLE_REDIRECT_URI || null,
+        revenueCatIosApiKey: REVENUECAT_IOS_API_KEY || null,
+        appleAgentProProductId: APPLE_AGENT_PRO_PRODUCT_ID,
       });
     }
 
@@ -694,15 +707,17 @@ async function handleApi(req, res, url) {
 
   // POST /api/agents/signup  { name, brokerage, email, phone, bio, specialties, areas,
   // state (array of 2-letter codes, or a comma-separated string — an agent can serve more
-  // than one state), yearsExperience, photoEmoji, and exactly one of: password, googleIdToken,
-  // appleIdToken }
-  // Creates (or reuses a not-yet-paid) realtor row, then starts a Stripe subscription checkout.
+  // than one state), yearsExperience, photoEmoji, platform ('ios' | omitted for web), and
+  // exactly one of: password, googleIdToken, appleIdToken }
+  // Creates (or reuses a not-yet-paid) realtor row, then starts a Stripe subscription checkout
+  // (web) or hands back the Apple product id for the native app to purchase via RevenueCat.
   if (req.method === 'POST' && parts[1] === 'agents' && parts[2] === 'signup' && parts.length === 3) {
     const body = await readBody(req);
     const name = (body.name || '').trim();
     let email = (body.email || '').trim();
+    const isNativePurchase = body.platform === 'ios';
     if (!name) return sendJson(res, 400, { error: 'name is required' });
-    if (!STRIPE_PRICE_ID) {
+    if (!isNativePurchase && !STRIPE_PRICE_ID) {
       return sendJson(res, 503, { error: 'Agent subscriptions are not configured yet. Set STRIPE_PRICE_ID.' });
     }
 
@@ -769,6 +784,19 @@ async function handleApi(req, res, url) {
     createSession('realtor', realtor.id, sessionToken);
     setSessionCookie(req, res, sessionToken);
 
+    // Native app: nothing left to do server-side — the app itself drives the StoreKit purchase
+    // sheet via RevenueCat (calling Purchases.logIn with this realtor's id first, so the
+    // resulting purchase and every future renewal/cancellation event is tagged with it). Once
+    // that purchase completes, RevenueCat's webhook (below) flips subscription_status to
+    // 'active' — same end state as the Stripe path, different trigger.
+    if (isNativePurchase) {
+      return sendJson(res, 200, {
+        realtor: { id: realtor.id },
+        requiresNativePurchase: true,
+        appleProductId: APPLE_AGENT_PRO_PRODUCT_ID,
+      });
+    }
+
     const origin = `https://${req.headers.host}`;
     try {
       const checkout = await stripe.createCheckoutSession({
@@ -804,6 +832,54 @@ async function handleApi(req, res, url) {
       console.error('Stripe billing portal error:', e.message);
       return sendJson(res, 502, { error: 'Could not open billing portal: ' + e.message });
     }
+  }
+
+  // POST /api/revenuecat/webhook — RevenueCat calls this on every subscription lifecycle event
+  // (purchase, renewal, cancellation, expiration, billing issue...) for the native app's Agent
+  // Pro Monthly subscription. Unlike Stripe, RevenueCat doesn't HMAC-sign the payload — instead
+  // you set a static "Authorization header value" in RevenueCat's dashboard (Project Settings ->
+  // Integrations -> Webhooks) which it sends back verbatim on every call, so we just compare it.
+  // event.app_user_id is expected to be our own realtor id: the native app calls
+  // Purchases.logIn(String(realtorId)) right after signup, which tells RevenueCat to tag every
+  // purchase/event for that device with our id instead of an anonymous one, so events map
+  // straight back to a realtors row with no extra lookup table needed.
+  if (req.method === 'POST' && parts[1] === 'revenuecat' && parts[2] === 'webhook' && parts.length === 3) {
+    if (!REVENUECAT_WEBHOOK_SECRET || req.headers['authorization'] !== REVENUECAT_WEBHOOK_SECRET) {
+      return sendJson(res, 401, { error: 'Invalid or missing webhook authorization.' });
+    }
+    const body = await readBody(req);
+    const event = body.event || body;
+    try {
+      const realtorId = Number(event.app_user_id);
+      if (realtorId && !Number.isNaN(realtorId)) {
+        const ACTIVE_TYPES = ['INITIAL_PURCHASE', 'RENEWAL', 'UNCANCELLATION', 'PRODUCT_CHANGE'];
+        const INACTIVE_TYPES = ['EXPIRATION'];
+        if (ACTIVE_TYPES.includes(event.type)) {
+          updateRealtorSubscription(realtorId, {
+            status: 'active',
+            platform: 'apple',
+            appleOriginalTransactionId: event.original_transaction_id || null,
+            currentPeriodEnd: event.expiration_at_ms ? new Date(event.expiration_at_ms).toISOString() : null,
+          });
+          console.log(`Agent #${realtorId} subscription -> active via RevenueCat (${event.type}).`);
+        } else if (INACTIVE_TYPES.includes(event.type)) {
+          updateRealtorSubscription(realtorId, { status: 'inactive', platform: 'apple' });
+          console.log(`Agent #${realtorId} subscription -> inactive via RevenueCat (${event.type}).`);
+        }
+        // CANCELLATION only means auto-renew was turned off — the agent keeps access until the
+        // period actually ends, which arrives later as its own EXPIRATION event, so no status
+        // change happens here. BILLING_ISSUE is Apple/RevenueCat retrying a failed renewal
+        // charge; if it's never resolved it also ends in an EXPIRATION event. Other event types
+        // (TEST, TRANSFER, etc.) aren't acted on.
+      } else {
+        console.warn('RevenueCat webhook event had no usable app_user_id:', event.type);
+      }
+    } catch (e) {
+      console.error('Error processing RevenueCat webhook event:', e);
+      // Still acknowledge with 200 below — RevenueCat retries on non-2xx, and a processing bug
+      // shouldn't cause it to hammer us; the error is logged for follow-up.
+    }
+    return sendJson(res, 200, { received: true });
   }
 
   // GET /api/realtor/:id/leads  -> clients who matched with this realtor (leads inbox).
@@ -1045,6 +1121,7 @@ async function handleStripeWebhook(req, res) {
             status: 'active',
             stripeCustomerId: obj.customer,
             stripeSubscriptionId: obj.subscription,
+            platform: 'stripe',
           });
           console.log(`Agent #${realtorId} subscription activated via checkout.`);
         }
@@ -1065,6 +1142,7 @@ async function handleStripeWebhook(req, res) {
             currentPeriodEnd: obj.current_period_end
               ? new Date(obj.current_period_end * 1000).toISOString()
               : null,
+            platform: 'stripe',
           });
           console.log(`Agent #${realtor.id} subscription -> ${status}.`);
         }
