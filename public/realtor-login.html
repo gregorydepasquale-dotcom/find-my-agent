@@ -69,15 +69,14 @@
         } catch (e) { return false; }
       }
 
-      // Bail out immediately, before anything else on this page runs or renders. Apple's
-      // guideline 3.1.1 flags any in-app reference to paid content/subscriptions that aren't
-      // sold via In-App Purchase — including a placeholder screen that merely explains the
-      // content exists and points users to the website — so the native app treats this whole
-      // route as if it doesn't exist rather than showing a gated version of it. The regular
-      // website (opened in Safari/Chrome) is completely unaffected.
-      if (isNativeApp()) {
-        window.location.replace('/');
-        return;
+      // True once the native app has the RevenueCat purchase plugin built in (see the matching
+      // comment in agent-signup.html — this page is fetched live into whatever app build is
+      // already installed, old or new). Logging in doesn't need the plugin — an agent who
+      // already subscribed via the website can view their dashboard natively either way — but
+      // once it's present, login also re-links this device to their RevenueCat account (see
+      // goToDashboard below), so a subscription started on another device is recognized here.
+      function hasNativePurchases() {
+        try { return !!(window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Purchases); } catch (e) { return false; }
       }
 
       function waitForGlobal(check, tries, interval) {
@@ -95,7 +94,15 @@
       const errorBanner = document.getElementById('error-banner');
       function showError(msg) { errorBanner.textContent = msg; errorBanner.style.display = 'block'; }
 
-      function goToDashboard(realtor) {
+      async function goToDashboard(realtor) {
+        // Best-effort: re-link this device to the agent's RevenueCat account so a native
+        // subscription purchased on another device (or before a reinstall) is recognized here.
+        // Never blocks navigation — our backend's subscriptionStatus (set by the RevenueCat/
+        // Stripe webhooks) is always the source of truth for what the dashboard shows.
+        if (isNativeApp() && hasNativePurchases()) {
+          try { await window.Capacitor.Plugins.Purchases.logIn({ appUserID: String(realtor.id) }); }
+          catch (e) { /* ignore — dashboard still works off our own subscriptionStatus */ }
+        }
         window.location.href = nextUrl || ('/realtor/' + realtor.id);
       }
 

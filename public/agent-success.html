@@ -19,17 +19,11 @@
   </div>
   <script>
     (function () {
-      // This page is only ever reached after a real Stripe checkout completes in a browser, so
-      // the native app should never land here — but as a safety net (Apple's guideline 3.1.1
-      // flags any in-app reference to a non-IAP subscription, even a post-payment confirmation
-      // screen), redirect straight back to the client experience if it somehow is opened there.
-      try {
-        if (window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform()) {
-          window.location.replace('/');
-          return;
-        }
-      } catch (e) { /* ignore */ }
-
+      // This page is reached both after a real Stripe checkout completes on the website, and
+      // (now that the native app has its own RevenueCat/StoreKit purchase flow — see
+      // agent-signup.html) after a real native purchase completes in the app. Either way a
+      // genuine purchase just happened, so there's nothing here for Apple's guideline 3.1.1 to
+      // flag — it's just a plain confirmation screen with no pricing or payment-method mentions.
       const params = new URLSearchParams(window.location.search);
       const realtorId = params.get('realtor_id');
       if (realtorId) {

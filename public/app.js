@@ -69,6 +69,13 @@
     } catch (e) { return false; }
   }
 
+  // True once the native app has the RevenueCat purchase plugin built in (see the matching
+  // comment in agent-signup.html — this file is fetched live into whatever app build is already
+  // installed, old or new, so this can't be inferred from isNativeApp() alone).
+  function hasNativePurchases() {
+    try { return !!(window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Purchases); } catch (e) { return false; }
+  }
+
   function waitForGlobal(check, tries, interval) {
     return new Promise((resolve) => {
       (function attempt(n) {
@@ -180,7 +187,7 @@
           <p class="splash-sub">Swipe through real agent profiles and match with the right one for you. Free, no obligation.</p>
           <button class="btn btn-primary splash-cta" id="splash-start" type="button">Get Started</button>
           <p class="hint">Already have an account? <a href="#" id="splash-login" style="color:#fff;">Log in</a></p>
-          ${isNativeApp() ? '' : '<p class="hint">Real estate agent? <a href="/agent-signup.html" style="color:#fff;">List your profile — $49/mo</a></p>'}
+          ${(!isNativeApp() || hasNativePurchases()) ? '<p class="hint">Real estate agent? <a href="/agent-signup.html" style="color:#fff;">List your profile — $49/mo</a></p>' : ''}
           <p class="hint" style="margin-top:-4px;"><a href="/privacy.html" style="color:rgba(255,255,255,0.5);">Privacy Policy</a></p>
         </div>
       </div>
@@ -744,18 +751,11 @@
   function renderRealtorDashboard(realtorId) {
     app.innerHTML = '';
 
-    // Apple's guideline 3.1.1 flags any in-app reference to paid content/subscriptions that
-    // aren't sold via In-App Purchase — including a "gated" placeholder screen that merely
-    // explains the content exists and points users to the website for it. So rather than show
-    // any agent/subscription-related messaging at all, the native app treats this route as if
-    // it doesn't exist and sends the visitor straight back to the client experience. The
-    // regular website (opened in Safari/Chrome) is completely unaffected — agents log in and
-    // manage leads there as normal.
-    if (isNativeApp()) {
-      window.location.replace('/');
-      return;
-    }
-
+    // Viewing your own dashboard — leads, profile — isn't a purchase or a reference to one, so
+    // it renders in the native app same as the website. The only things Apple's guideline 3.1.1
+    // requires hiding here are the two billing-specific bits below (a Stripe "Manage billing"
+    // link, and the "Subscribe" link when the native purchase flow isn't available yet) — those
+    // are gated individually where they're built, not by blocking this whole route.
     const wrap = el(`
       <div style="display:flex; flex-direction:column; min-height:100vh; min-height:100dvh;">
         <div class="topbar">
@@ -787,12 +787,15 @@
         : `<div class="empty-state"><div class="emoji">📭</div><p>No leads matched yet.</p></div>`;
 
       const isActive = realtor.subscriptionStatus === 'active';
+      // "Manage billing" opens a Stripe portal link — a non-IAP payment-management flow that
+      // Apple's guideline 3.1.1 doesn't allow referencing inside the native binary, so it's
+      // website-only regardless of which platform this particular agent actually pays through.
       const subBanner = isActive
         ? `<div class="sub-banner sub-active">✅ Your profile is live and visible to clients.
-            ${realtor.hasBillingAccount ? '<button id="manage-billing" class="link-btn">Manage billing</button>' : ''}
+            ${(!isNativeApp() && realtor.hasBillingAccount) ? '<button id="manage-billing" class="link-btn">Manage billing</button>' : ''}
           </div>`
         : `<div class="sub-banner sub-inactive">⚠️ Your profile is hidden from clients until you subscribe.
-            <a href="/agent-signup.html" class="link-btn" style="text-decoration:none;">Subscribe — $49/mo</a>
+            ${(!isNativeApp() || hasNativePurchases()) ? '<a href="/agent-signup.html" class="link-btn" style="text-decoration:none;">Subscribe — $49/mo</a>' : ''}
           </div>`;
 
       content.innerHTML = `
