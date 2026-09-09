@@ -36,6 +36,20 @@
     return data;
   }
 
+  // Video uploads go straight through as the raw file body (not JSON/base64) — large clips
+  // would otherwise blow past reasonable JSON payload sizes and pay a ~33% base64 penalty.
+  // Session cookie rides along automatically since this is a same-origin fetch.
+  async function uploadRealtorVideo(realtorId, file) {
+    const res = await fetch('/api/realtor/' + realtorId + '/video', {
+      method: 'POST',
+      headers: { 'Content-Type': file.type },
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Upload failed');
+    return data;
+  }
+
   function el(html) {
     const t = document.createElement('template');
     t.innerHTML = html.trim();
@@ -748,6 +762,29 @@
   }
 
   // ---------------- Realtor dashboard ----------------
+  function videoSectionHtml(r) {
+    const preview = r.videoUrl
+      ? `<video class="dash-video-preview" src="${esc(r.videoUrl)}" muted playsinline controls></video>`
+      : `<div class="dash-video-preview dash-video-empty">No intro video yet</div>`;
+    return `
+      <div class="dash-video-section">
+        <h3>Intro video</h3>
+        <p class="dash-video-hint">A short clip of yourself helps clients pick you. MP4, MOV, or WEBM — max 60MB.</p>
+        <div class="dash-video-row">
+          ${preview}
+          <div class="dash-video-actions">
+            <label class="btn btn-secondary dash-video-upload-label">
+              <span class="dash-video-upload-text">${r.videoUrl ? 'Replace video' : 'Upload video'}</span>
+              <input type="file" id="dash-video-input" accept="video/mp4,video/quicktime,video/webm" style="display:none;" />
+            </label>
+            ${r.videoUrl ? '<button type="button" id="dash-video-remove" class="dash-video-remove-btn">Remove video</button>' : ''}
+          </div>
+        </div>
+        <div class="error-banner" id="dash-video-error" style="display:none;"></div>
+      </div>
+    `;
+  }
+
   function renderRealtorDashboard(realtorId) {
     app.innerHTML = '';
 
@@ -804,6 +841,7 @@
           <p>${esc(realtor.brokerage || '')} · ${leads.length} lead${leads.length === 1 ? '' : 's'} matched</p>
         </div>
         ${subBanner}
+        ${videoSectionHtml(realtor)}
         ${leadItems}
         <p class="hint">This is your leads inbox — everyone who swiped right on your profile shows up here.</p>
         <button class="btn btn-secondary" id="dash-logout" style="margin-top:14px;">Log out</button>
@@ -823,6 +861,43 @@
             billingBtn.disabled = false;
             billingBtn.textContent = 'Manage billing';
             alert('Could not open billing portal: ' + err.message);
+          }
+        });
+      }
+      const videoInput = content.querySelector('#dash-video-input');
+      const videoErrorBox = content.querySelector('#dash-video-error');
+      if (videoInput) {
+        videoInput.addEventListener('change', async () => {
+          const file = videoInput.files[0];
+          if (!file) return;
+          videoErrorBox.style.display = 'none';
+          const label = content.querySelector('.dash-video-upload-text');
+          const originalText = label.textContent;
+          label.textContent = 'Uploading…';
+          try {
+            await uploadRealtorVideo(realtorId, file);
+            renderRealtorDashboard(realtorId);
+          } catch (err) {
+            label.textContent = originalText;
+            videoErrorBox.textContent = err.message || 'Upload failed. Please try again.';
+            videoErrorBox.style.display = 'block';
+          }
+        });
+      }
+      const removeVideoBtn = content.querySelector('#dash-video-remove');
+      if (removeVideoBtn) {
+        removeVideoBtn.addEventListener('click', async () => {
+          if (!confirm('Remove your intro video?')) return;
+          removeVideoBtn.disabled = true;
+          removeVideoBtn.textContent = 'Removing…';
+          try {
+            await api('/realtor/' + realtorId + '/video', { method: 'DELETE' });
+            renderRealtorDashboard(realtorId);
+          } catch (err) {
+            removeVideoBtn.disabled = false;
+            removeVideoBtn.textContent = 'Remove video';
+            videoErrorBox.textContent = err.message || 'Something went wrong. Please try again.';
+            videoErrorBox.style.display = 'block';
           }
         });
       }
