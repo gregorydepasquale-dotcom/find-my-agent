@@ -689,6 +689,61 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { realtor: realtorToOwner(realtor) });
   }
 
+  // POST /api/realtor/:id/video  -> self-service upload/replace of your own intro video.
+  // Session-authenticated to that realtor's own id only — same raw-binary-body approach as
+  // the admin video endpoint below (the browser sends the File object directly as the fetch
+  // body, with its MIME type in Content-Type), just gated by login instead of the admin password.
+  if (req.method === 'POST' && parts[1] === 'realtor' && parts[3] === 'video' && parts.length === 4) {
+    const id = Number(parts[2]);
+    const session = getCurrentSession(req);
+    if (!session || session.subject_type !== 'realtor' || session.subject_id !== id) {
+      return sendJson(res, 401, { error: 'Please log in to update your profile.' });
+    }
+    const current = getRealtorById(id);
+    if (!current) return sendJson(res, 404, { error: 'realtor not found' });
+
+    const contentType = String(req.headers['content-type'] || '').toLowerCase();
+    const ext = VIDEO_MIME_EXT[contentType];
+    if (!ext) return sendJson(res, 400, { error: 'Unsupported video type. Use MP4, MOV, or WEBM.' });
+
+    let buffer;
+    try {
+      buffer = await readRawBinaryBody(req, MAX_VIDEO_BYTES);
+    } catch (e) {
+      return sendJson(res, 413, { error: 'Video is too large (max 60MB).' });
+    }
+    if (!buffer.length) return sendJson(res, 400, { error: 'No video data provided.' });
+
+    const filename = `realtor-${id}-${Date.now()}${ext}`;
+    fs.writeFileSync(path.join(UPLOADS_DIR, filename), buffer);
+
+    // Best-effort cleanup of the previous video file so uploads don't accumulate forever.
+    if (current.video_url && current.video_url.startsWith('/uploads/')) {
+      const oldPath = path.join(UPLOADS_DIR, path.basename(current.video_url));
+      fs.unlink(oldPath, () => {});
+    }
+
+    const updated = setRealtorVideo(id, '/uploads/' + filename);
+    return sendJson(res, 200, { realtor: realtorToOwner(updated) });
+  }
+
+  // DELETE /api/realtor/:id/video  -> self-service removal of your own intro video.
+  if (req.method === 'DELETE' && parts[1] === 'realtor' && parts[3] === 'video' && parts.length === 4) {
+    const id = Number(parts[2]);
+    const session = getCurrentSession(req);
+    if (!session || session.subject_type !== 'realtor' || session.subject_id !== id) {
+      return sendJson(res, 401, { error: 'Please log in to update your profile.' });
+    }
+    const current = getRealtorById(id);
+    if (!current) return sendJson(res, 404, { error: 'realtor not found' });
+    if (current.video_url && current.video_url.startsWith('/uploads/')) {
+      const oldPath = path.join(UPLOADS_DIR, path.basename(current.video_url));
+      fs.unlink(oldPath, () => {});
+    }
+    const updated = setRealtorVideo(id, null);
+    return sendJson(res, 200, { realtor: realtorToOwner(updated) });
+  }
+
   // DELETE /api/realtor/me  -> self-service account deletion. Session-authenticated only —
   // a realtor can only ever delete their own profile, never another one. Best-effort cancels
   // any active Stripe subscription first so deleting the account also stops future billing.
