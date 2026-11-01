@@ -91,6 +91,39 @@ Once the build and screenshots are attached, click **Add for Review**, then **Su
 
 ---
 
+## Shipping the native Google Sign-In update
+
+This repo now has native "Continue with Google" wired up for the iOS app (the website already had
+it). Everything server-side is done and live — the only thing left is building and resubmitting
+the app itself. On your Mac, in the project folder:
+
+```
+git pull
+npm install
+npx cap sync ios
+```
+
+`npm install` pulls in the new `@capgo/capacitor-social-login` plugin; `cap sync` copies it (and
+the Info.plist/SceneDelegate changes already in this repo) into the Xcode project. Then bump the
+**Build** number in Xcode (General tab — Apple won't accept a re-upload with the same build number
+as 1.2), and repeat Steps 7–10 above (Archive → Distribute App → attach build → submit).
+
+**Before you submit, two things to know:**
+
+1. **Apple's "Sign in with Apple" rule (Guideline 4.8).** Apple generally requires that if an app
+   offers a third-party sign-in option (Google, Facebook, etc.) in-app, it must also offer
+   "Sign in with Apple" as an equivalent option. Right now the app's native sign-in is
+   email/password only, so adding Google-only native sign-in risks a rejection on this point.
+   The code already supports Apple sign-in on the *website* (it's just not configured/enabled
+   yet) — ask me if you'd like native Apple Sign-In added too before you submit, to stay safe on
+   this rule.
+2. **Paid Applications Agreement.** App Store Connect → Business still has an unaccepted
+   agreement banner (separate from the Developer Program License Agreement already accepted).
+   Apple may block new submissions until that's reviewed and accepted — that one needs your own
+   review since it's a financial/legal terms screen.
+
+---
+
 ### If anything goes wrong
 
 Copy the exact error message you see (from Xcode or App Store Connect) and send it to me — I can read the code and the App Store Connect setup, so I can usually tell you exactly what's wrong and how to fix it, even though I can't click the buttons myself.
