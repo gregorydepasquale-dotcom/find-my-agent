@@ -91,11 +91,14 @@ Once the build and screenshots are attached, click **Add for Review**, then **Su
 
 ---
 
-## Shipping the native Google Sign-In update
+## Shipping the native Google + Apple Sign-In update
 
-This repo now has native "Continue with Google" wired up for the iOS app (the website already had
-it). Everything server-side is done and live — the only thing left is building and resubmitting
-the app itself. On your Mac, in the project folder:
+This repo now has native "Continue with Google" **and** "Continue with Apple" wired up for the
+iOS app (the website already had both — Apple's was just added and is now live there too).
+Everything server-side is done and live — Apple Guideline 4.8 (an app offering one third-party
+sign-in must offer an equivalent "Sign in with Apple" option) is now satisfied. What's left is one
+new Xcode setting plus building and resubmitting the app itself. On your Mac, in the project
+folder:
 
 ```
 git pull
@@ -103,24 +106,33 @@ npm install
 npx cap sync ios
 ```
 
-`npm install` pulls in the new `@capgo/capacitor-social-login` plugin; `cap sync` copies it (and
-the Info.plist/SceneDelegate changes already in this repo) into the Xcode project. Then bump the
-**Build** number in Xcode (General tab — Apple won't accept a re-upload with the same build number
-as 1.2), and repeat Steps 7–10 above (Archive → Distribute App → attach build → submit).
+`npm install` pulls in the `@capgo/capacitor-social-login` plugin; `cap sync` copies it (and the
+Info.plist/SceneDelegate changes already in this repo) into the Xcode project.
 
-**Before you submit, two things to know:**
+### Add the "Sign in with Apple" capability in Xcode
 
-1. **Apple's "Sign in with Apple" rule (Guideline 4.8).** Apple generally requires that if an app
-   offers a third-party sign-in option (Google, Facebook, etc.) in-app, it must also offer
-   "Sign in with Apple" as an equivalent option. Right now the app's native sign-in is
-   email/password only, so adding Google-only native sign-in risks a rejection on this point.
-   The code already supports Apple sign-in on the *website* (it's just not configured/enabled
-   yet) — ask me if you'd like native Apple Sign-In added too before you submit, to stay safe on
-   this rule.
-2. **Paid Applications Agreement.** App Store Connect → Business still has an unaccepted
-   agreement banner (separate from the Developer Program License Agreement already accepted).
-   Apple may block new submissions until that's reviewed and accepted — that one needs your own
-   review since it's a financial/legal terms screen.
+This one has to be done by hand in Xcode (it's not a file `cap sync` can copy in):
+
+1. In the left sidebar, click the blue **App** project icon at the very top, then select the
+   **App** target.
+2. Click the **Signing & Capabilities** tab (same tab as Step 5 above).
+3. Click **+ Capability** (top-left of that tab).
+4. Double-click **"Sign in with Apple"** in the list that pops up.
+
+Xcode adds it instantly — no typing needed. It may prompt that your provisioning profile needs to
+be regenerated; if so, just let it (toggling "Automatically manage signing" off and back on, or
+re-selecting your Team, forces a regenerate if it doesn't happen on its own).
+
+Then bump the **Build** number in Xcode (General tab — Apple won't accept a re-upload with the
+same build number as a previous one), and repeat Steps 7–10 above (Archive → Distribute App →
+attach build → submit).
+
+**Before you submit, one thing to know:**
+
+**Paid Applications Agreement.** App Store Connect → Business still has an unaccepted agreement
+banner (separate from the Developer Program License Agreement already accepted). Apple may block
+new submissions until that's reviewed and accepted — that one needs your own review since it's a
+financial/legal terms screen.
 
 ---
 
