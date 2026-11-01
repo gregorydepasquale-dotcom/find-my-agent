@@ -100,6 +100,26 @@
     });
   }
 
+  // True once the native app has the @capgo/capacitor-social-login plugin built in — same
+  // "fetched live, might be an older install" caveat as hasNativePurchases() above.
+  function hasNativeSocialLogin() {
+    try { return !!(window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SocialLogin); } catch (e) { return false; }
+  }
+
+  // Lazily initializes the native SocialLogin plugin's Google provider exactly once per page
+  // load. iOSServerClientId is set to the *web* client ID (GOOGLE_CLIENT_ID) so the ID token
+  // Google hands back is still audienced to it — the backend verifies native and web sign-ins
+  // the exact same way, no separate code path needed server-side.
+  let nativeGoogleInitPromise = null;
+  function initNativeGoogleSignIn(iosClientId, webClientId) {
+    if (!nativeGoogleInitPromise) {
+      nativeGoogleInitPromise = window.Capacitor.Plugins.SocialLogin.initialize({
+        google: { iOSClientId: iosClientId, iOSServerClientId: webClientId, mode: 'online' },
+      });
+    }
+    return nativeGoogleInitPromise;
+  }
+
   // Renders Google + Apple buttons into `container` when configured. `onToken(provider,
   // idToken, displayName)` is called on success; displayName is only ever non-null the very
   // first time someone signs in with Apple (Apple only sends the name once, per its API).
@@ -123,6 +143,26 @@
           window.google.accounts.id.renderButton(slot, { theme: 'filled_black', size: 'large', shape: 'pill', width: 260 });
         } catch (e) { /* non-fatal — button just won't appear */ }
       }
+    }
+
+    // Native (iOS app) Google sign-in — separate from the web button above since the Google
+    // Identity Services JS SDK doesn't work inside the Capacitor webview. Uses the native
+    // @capgo/capacitor-social-login plugin instead, which wraps Google's real iOS SDK.
+    // cfg.googleIosClientId is only set once GOOGLE_IOS_CLIENT_ID is configured server-side and
+    // this build has been synced with the plugin — both buttons degrade to "not shown" if
+    // either piece isn't there yet, same as the web button does for GOOGLE_CLIENT_ID.
+    if (cfg.googleClientId && cfg.googleIosClientId && isNativeApp() && hasNativeSocialLogin()) {
+      const btn = el(`<button type="button" class="btn btn-google"> Continue with Google</button>`);
+      row.appendChild(btn);
+      btn.addEventListener('click', async () => {
+        try {
+          await initNativeGoogleSignIn(cfg.googleIosClientId, cfg.googleClientId);
+          const res = await window.Capacitor.Plugins.SocialLogin.login({ provider: 'google', options: { scopes: ['email', 'profile'] } });
+          const idToken = res && res.result && res.result.idToken;
+          if (!idToken) throw new Error('No ID token returned');
+          onToken('google', idToken, null);
+        } catch (e) { /* non-fatal — user can still use email/password, or just cancelled */ }
+      });
     }
 
     if (cfg.appleServicesId) {

@@ -69,6 +69,12 @@ const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || '';
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+// Separate OAuth client (Google Cloud console -> Application type "iOS") used only by the
+// native app's in-app Google Sign-In (@capgo/capacitor-social-login). It's configured with this
+// Web client ID as its "server client ID", so the ID token it returns is still audienced to
+// GOOGLE_CLIENT_ID above and verifies the same way as the website's token — this value is only
+// handed to the frontend so the native SDK knows which iOS client to present as.
+const GOOGLE_IOS_CLIENT_ID = process.env.GOOGLE_IOS_CLIENT_ID || '';
 const APPLE_SERVICES_ID = process.env.APPLE_SERVICES_ID || '';
 const APPLE_REDIRECT_URI = process.env.APPLE_REDIRECT_URI || '';
 // Native iOS subscription (RevenueCat -> StoreKit), parallel to the Stripe/website setup above.
@@ -341,6 +347,7 @@ async function handleApi(req, res, url) {
     if (req.method === 'GET' && parts[2] === 'config' && parts.length === 3) {
       return sendJson(res, 200, {
         googleClientId: GOOGLE_CLIENT_ID || null,
+        googleIosClientId: GOOGLE_IOS_CLIENT_ID || null,
         appleServicesId: APPLE_SERVICES_ID || null,
         appleRedirectUri: APPLE_REDIRECT_URI || null,
         revenueCatIosApiKey: REVENUECAT_IOS_API_KEY || null,

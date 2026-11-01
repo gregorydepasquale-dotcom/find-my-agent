@@ -8,6 +8,21 @@
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
         <string>Agentr</string>
+	<!-- Google Sign-In (native, @capgo/capacitor-social-login) needs this reversed-client-ID
+	     URL scheme so iOS can hand control back to the app after the Google login sheet closes.
+	     This is the "iOS client" created in Google Cloud console for bundle ID
+	     com.ikonickproperties.findmyagent, client ID
+	     744052104244-5bok70eem07n7dgtpklureiu4m7glsag.apps.googleusercontent.com, with its
+	     dot-separated parts reversed. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.744052104244-5bok70eem07n7dgtpklureiu4m7glsag</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

@@ -10,5 +10,12 @@
   "backgroundColor": "#15110a",
   "ios": {
     "backgroundColor": "#15110a"
+  },
+  "plugins": {
+    "SocialLogin": {
+      "providers": {
+        "google": true
+      }
+    }
   }
 }

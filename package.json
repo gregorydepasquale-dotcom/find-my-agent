@@ -13,6 +13,7 @@
   },
   "license": "UNLICENSED",
   "dependencies": {
+    "@capgo/capacitor-social-login": "^8.0.0",
     "@revenuecat/purchases-capacitor": "^13.5.0"
   },
   "devDependencies": {
