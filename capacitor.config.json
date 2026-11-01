@@ -14,7 +14,8 @@
   "plugins": {
     "SocialLogin": {
       "providers": {
-        "google": true
+        "google": true,
+        "apple": true
       }
     }
   }

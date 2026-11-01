@@ -120,6 +120,11 @@
     return nativeGoogleInitPromise;
   }
 
+  // Lazily initializes the native SocialLogin plugin's Apple provider exactly once per page
+  // load — mirrors initNativeGoogleSignIn() above. No config needed: the plugin reads the app's
+  // own "Sign in with Apple" entitlement.
+  let nativeAppleInitPromise = null;
+
   // Renders Google + Apple buttons into `container` when configured. `onToken(provider,
   // idToken, displayName)` is called on success; displayName is only ever non-null the very
   // first time someone signs in with Apple (Apple only sends the name once, per its API).
@@ -165,7 +170,11 @@
       });
     }
 
-    if (cfg.appleServicesId) {
+    // Web Apple sign-in — uses Apple's JS SDK (AppleID.auth), which only works in a real
+    // browser context (it opens a Safari-hosted popup/redirect). Gated out of the native app
+    // the same way the web Google button is, since the native app uses the SocialLogin plugin
+    // instead (see the native branch below).
+    if (cfg.appleServicesId && !isNativeApp()) {
       const ready = await waitForGlobal(() => window.AppleID && window.AppleID.auth);
       if (ready) {
         try {
@@ -189,6 +198,31 @@
           });
         } catch (e) { /* non-fatal */ }
       }
+    }
+
+    // Native (iOS app) Apple sign-in — uses Apple's real native Sign In with Apple sheet via the
+    // @capgo/capacitor-social-login plugin's Apple provider, not the web JS SDK above (which
+    // doesn't work inside the Capacitor webview). No clientId is needed on iOS — the plugin uses
+    // the app's own "Sign in with Apple" capability/entitlement, not the Services ID (that's only
+    // for the web flow). The ID token this returns is still audienced to APPLE_SERVICES_ID on
+    // Apple's side, matching what the backend's verifyAppleIdToken() already expects.
+    if (cfg.appleServicesId && isNativeApp() && hasNativeSocialLogin()) {
+      const btn = el(`<button type="button" class="btn btn-apple"> Continue with Apple</button>`);
+      row.appendChild(btn);
+      btn.addEventListener('click', async () => {
+        try {
+          if (!nativeAppleInitPromise) {
+            nativeAppleInitPromise = window.Capacitor.Plugins.SocialLogin.initialize({ apple: {} });
+          }
+          await nativeAppleInitPromise;
+          const res = await window.Capacitor.Plugins.SocialLogin.login({ provider: 'apple', options: { scopes: ['email', 'name'] } });
+          const idToken = res && res.result && res.result.idToken;
+          if (!idToken) throw new Error('No ID token returned');
+          const profile = res.result.profile;
+          const name = profile ? `${profile.givenName || ''} ${profile.familyName || ''}`.trim() || null : null;
+          onToken('apple', idToken, name);
+        } catch (e) { /* non-fatal — user can still use email/password, or just cancelled */ }
+      });
     }
   }
 
