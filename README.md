@@ -73,22 +73,22 @@ below** — a native app needs something real to talk to.
 
 I generated everything I could without needing internet access or Xcode
 (neither of which this environment has): the App Store-ready icon, a splash
-screen, and a Capacitor config, all using your actual IKONICK Properties
-logo and colors. See `appstore-assets/` — `icon.png` (1024×1024, no
+screen, and a Capacitor config, matching the "Ar" gradient mark the app
+actually uses in its header/favicon (`public/img/apple-touch-icon.png`) —
+not the IKONICK Properties badge, which isn't used anywhere in the live
+app. The source images live in `assets/` — `icon.png` (1024×1024, no
 transparency, per Apple's requirement) and `splash.png` (2732×2732).
+That's also the default folder `@capacitor/assets` reads from, so the
+`generate` command below picks them up automatically — no extra flags
+needed.
 
-The remaining steps need to run on your own Mac, where you have internet
-access and (if installed) Xcode — I can't run these myself from here:
+1. **Backend is already deployed.** `capacitor.config.json`'s `server.url`
+   already points at the live Railway URL
+   (`https://find-my-agent-production.up.railway.app`) — nothing to do here
+   unless you redeploy somewhere else, in which case update that field to
+   match.
 
-1. **Deploy the backend first** (see "Deploying it for real" above) and
-   grab the live URL, e.g. `https://ikonick-match.up.railway.app`.
-
-2. **Point the app at it.** Open `capacitor.config.json` and replace
-   `REPLACE-WITH-YOUR-DEPLOYED-URL.example.com` in the `server.url` field
-   with your real deployed URL. This makes the native app shell simply
-   display your live, working app — no code changes needed elsewhere.
-
-3. **In Terminal, from this project folder:**
+2. **In Terminal, from this project folder:**
 
    ```bash
    npm install @capacitor/core @capacitor/cli @capacitor/ios
@@ -102,12 +102,12 @@ access and (if installed) Xcode — I can't run these myself from here:
    The last command opens the generated project in Xcode (you'll need
    Xcode installed from the Mac App Store — it's free).
 
-4. **In Xcode:** set your Team under Signing & Capabilities (this requires
+3. **In Xcode:** set your Team under Signing & Capabilities (this requires
    an Apple Developer Program membership, $99/year, enrolled at
    [developer.apple.com](https://developer.apple.com)), then Product →
    Archive to build a release version.
 
-5. **In App Store Connect** (developer.apple.com): create a new app
+4. **In App Store Connect** (developer.apple.com): create a new app
    listing, fill in the required metadata — screenshots (use the phone
    simulator in Xcode, or real screenshots from the deployed web app),
    description, privacy policy URL (required — you'll need to write one,

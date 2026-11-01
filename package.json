@@ -12,7 +12,9 @@
     "seed:reset": "node -e \"require('fs').existsSync('./data/app.db') && require('fs').unlinkSync('./data/app.db')\" && node -e \"require('./db')\""
   },
   "license": "UNLICENSED",
-  "dependencies": {},
+  "dependencies": {
+    "@revenuecat/purchases-capacitor": "^13.5.0"
+  },
   "devDependencies": {
     "@capacitor/cli": "^8.0.0",
     "@capacitor/core": "^8.0.0",
